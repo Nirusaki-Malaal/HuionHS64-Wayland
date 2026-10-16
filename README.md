@@ -18,14 +18,6 @@ The installer detects your distro, installs dependencies, builds the app and sta
 - Open **Kalam Tablet Settings** from your app menu, or run `huion-gui`.
 - Choose your settings, press **Apply**, and draw in **Try your pen** to test them.
 
-## AI usage disclosure
-
-Reverse engineering and development were AI-assisted using **GEMINI 3.8 Flash**, **Muse Spark 1.3**, and **GPT-6.1 Sol Light**.
-
-## License
-
-[GPL-3.0-or-later](LICENSE). Want to know more? Read the [documentation](documentation.md).
-
 ## Screenshots
 
 <p><img src="docs/images/settings.png" width="32%" alt="Tablet settings"> <img src="docs/images/pen-workspace.png" width="32%" alt="Pen workspace"> <img src="docs/images/buttons.png" width="32%" alt="Button layout and shortcuts"></p>
@@ -38,3 +30,11 @@ Reverse engineering and development were AI-assisted using **GEMINI 3.8 Flash**,
 | Settings window | 201.85 MiB | 0.10% |
 
 30-second observation on Arch Linux/Wayland, with the settings window open. Results vary. [Method and raw measurements](documentation.md#resource-measurements).
+
+## AI usage disclosure
+
+Reverse engineering and development were AI-assisted using **GEMINI 3.8 Flash**, **Muse Spark 1.3**, and **GPT-6.1 Sol Light**.
+
+## License
+
+[GPL-3.0-or-later](LICENSE). Want to know more? Read the [documentation](documentation.md).
