@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Live service ownership regression; briefly stops and always restarts the daemon."""
+import ast
+import json
 import errno
 import fcntl
 import os
@@ -45,8 +47,17 @@ finally:
     subprocess.run(['systemctl', '--user', 'start', 'huion-wayland.service'], check=True)
 
 end = time.monotonic()+5
-while len(virtual_nodes()) != 2 and time.monotonic() < end:
+# UI_DEV_CREATE makes nodes visible slightly before physical grabs complete.
+# Wait for the daemon's published readiness, not merely the node count.
+while time.monotonic() < end:
+    reply = subprocess.run(['gdbus', 'call', '--session', '--dest', 'org.wayland.HuionTablet',
+                            '--object-path', '/org/wayland/HuionTablet', '--method',
+                            'org.wayland.HuionTablet.GetDeviceInfo'], capture_output=True, text=True)
+    if reply.returncode == 0 and json.loads(ast.literal_eval(reply.stdout)[0]).get('connected'):
+        break
     time.sleep(.05)
+else:
+    raise AssertionError('Daemon did not acquire the tablet within five seconds')
 assert len(virtual_nodes()) == 2
 for node in physical_nodes():
     verify_grab(node, False)

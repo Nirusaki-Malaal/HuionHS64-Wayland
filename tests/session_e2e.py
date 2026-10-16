@@ -3,6 +3,7 @@
 import ast
 import json
 import subprocess
+import time
 
 PREFIX = ['gdbus', 'call', '--session', '--dest', 'org.wayland.HuionTablet',
           '--object-path', '/org/wayland/HuionTablet', '--method']
@@ -24,7 +25,11 @@ try:
     bad = dict(original, target_output='unsupported-output')
     assert call('SetConfig', json.dumps(bad)) == '(false,)'
     assert get('GetConfig') == original
+    deadline = time.monotonic() + 3
     device = get('GetDeviceInfo')
+    while not device.get('connected') and time.monotonic() < deadline:
+        time.sleep(.05)
+        device = get('GetDeviceInfo')
     displays = get('GetDisplays')
     assert isinstance(device.get('connected'), bool)
     assert isinstance(displays, list)
