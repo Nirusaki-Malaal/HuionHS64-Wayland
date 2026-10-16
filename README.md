@@ -209,8 +209,6 @@ come from the Ubuntu CI runner.
 
 ## License
 
-The existing repository ships [MIT](LICENSE-MIT) and
-[Apache 2.0](LICENSE-APACHE) license texts. Cargo metadata currently declares
-GPL-3.0-or-later; this preexisting inconsistency needs an owner decision before
-a release. The supplied proprietary Huion package and decompilation dumps are
-not redistributed in this repository.
+Kalam is licensed under **GPL-3.0-or-later**. See [LICENSE](LICENSE).
+The supplied proprietary Huion package and vendor decompilation dumps are not
+redistributed with Kalam.

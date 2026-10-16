@@ -25,7 +25,8 @@ def main():
     args = parser.parse_args()
     if platform.system() != 'Linux' or platform.machine() != 'x86_64':
         parser.error('This release package supports Linux x86_64')
-    version = tomllib.loads((ROOT / 'Cargo.toml').read_text())['workspace']['package']['version']
+    metadata = tomllib.loads((ROOT / 'Cargo.toml').read_text())['workspace']['package']
+    version = metadata['version']
     name = f'kalam-{version}-linux-x86_64'
     args.output.mkdir(parents=True, exist_ok=True)
     epoch = int(output('git', 'show', '-s', '--format=%ct', 'HEAD'))
@@ -40,7 +41,7 @@ def main():
             shutil.copy2(source, target)
             subprocess.run(['strip', '--strip-unneeded', str(target)], check=True)
         for relative in ('install.sh', 'uninstall.sh', 'scripts/manage_install.py',
-                         'README.md', 'documentation.md', 'RELEASE_NOTES.md', 'LICENSE-MIT', 'LICENSE-APACHE',
+                         'README.md', 'documentation.md', 'RELEASE_NOTES.md', 'LICENSE',
                          'data/70-huion-wayland.rules', 'data/huion-wayland.service',
                          'data/io.github.nirusaki.HuionWayland.desktop', 'data/kalam-uinput.conf',
                          'docs/images/settings.png', 'docs/images/buttons.png',
@@ -51,6 +52,7 @@ def main():
             shutil.copy2(source, target)
         (bundle / 'BUILD-INFO.json').write_text(json.dumps({
             'project': 'Kalam', 'version': version, 'author': 'nirusaki',
+            'license': metadata['license'],
             'description': 'A reverse engineering project for the Huion HS64 on native Wayland',
             'commit': output('git', 'rev-parse', 'HEAD'),
             'target': 'x86_64-unknown-linux-gnu',

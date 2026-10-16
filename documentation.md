@@ -207,6 +207,6 @@ autostart. `--destdir` stages files with no sudo, module/udev operations, or
 service changes. Uninstallation preserves personal configuration.
 
 `tools/package_release.py` strips copies of release binaries, bundles scripts,
-data, documentation and original license notices, and writes SHA256SUMS plus
+data, documentation and the GPL license, and writes SHA256SUMS plus
 build provenance. Native GTK libraries are not bundled; the published build
 requires Ubuntu24.04-compatible runtime libraries. See README.md for commands.

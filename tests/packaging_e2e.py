@@ -23,6 +23,11 @@ with tempfile.TemporaryDirectory(prefix='kalam-install-test-') as temporary:
     bundle = base/'extracted'/archive.name.removesuffix('.tar.gz')
     info = json.loads((bundle/'BUILD-INFO.json').read_text())
     assert info['version'] == version and info['author'] == 'nirusaki'
+    assert info['license'] == 'GPL-3.0-or-later'
+    assert sorted(path.name for path in bundle.glob('LICENSE*')) == ['LICENSE']
+    assert 'GNU GENERAL PUBLIC LICENSE' in (bundle/'LICENSE').read_text()
+    assert not (bundle/'research').exists() and not (bundle/'research.md').exists()
+    assert not (bundle/'plan.md').exists() and not (bundle/'BUILD_CONTEXT.md').exists()
     spec = importlib.util.spec_from_file_location('installer', bundle/'scripts/manage_install.py')
     installer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(installer)
