@@ -1,4 +1,4 @@
-# Verification — 2026-10-16
+# Verification - 2026-10-16
 
 These results distinguish static analysis, synthetic checks and live hardware.
 They are not a claim that every possible driver bug or compositor is covered.
@@ -45,7 +45,7 @@ Descriptors and bounded actual report samples are retained in
 
 One early installed iteration scaled pressure using descriptor4095 and reached
 libinput1.0 prematurely. After live reports contradicted that assumption, it was
-corrected to retain nominal0–8191 raw pressure, covered by captured regression
+corrected to retain nominal0-8191 raw pressure, covered by captured regression
 and repeated kernel/build checks. The retained early libinput pressure summary
 must not be mistaken for a final full-range calibration measurement.
 

@@ -47,13 +47,13 @@ See [vendor-analysis.md](research/vendor-analysis.md) and
 | 1 bit 0 | Tip contact |
 | 1 bits 1/2 | Barrel buttons |
 | 1 bit 6 | In-range proximity |
-| 2–3 | X, little endian, native maximum 32000 |
-| 4–5 | Y, little endian, native maximum 20400 |
-| 6–7 | Pressure, little endian |
+| 2-3 | X, little endian, native maximum 32000 |
+| 4-5 | Y, little endian, native maximum 20400 |
+| 6-7 | Pressure, little endian |
 
 The descriptor advertises pressure max 4095 but captured contact reports exceed
 5400. Its pressure metadata is not a trustworthy scaling limit. Raw pressure is
-retained within nominal 0–8191; no conversion from 4095 is applied. This does not
+retained within nominal 0-8191; no conversion from 4095 is applied. This does not
 prove all 8192 values were exercised. A captured value above 4095 is a regression
 fixture. X/Y are normalized into canonical 40000 × 25000 so existing saved active
 areas remain compatible. Bit 4 is not proximity for this report. Hover and
@@ -102,7 +102,7 @@ capability; the daemon emits no relative motion.
 ### Vendor reports 0x08
 
 Ghidra decompilation proves these multiplex pen, keys and other functions by
-byte 1. Hardware keys use a different field at bytes 4–7; a second-byte four-bit
+byte 1. Hardware keys use a different field at bytes 4-7; a second-byte four-bit
 mask is incorrect. These packets remain Raw until vendor mode/capabilities are
 implemented together. The daemon does not send mode-changing USB requests.
 Vendor functions named `hid_get_feature_report` actually perform USB string
@@ -191,3 +191,24 @@ monitor mapping, tilt, or universal compositor compatibility is claimed.
   compositor instead of assuming USB detection proves usable tablet input. Its
   VEIKK-specific correction was not applied to this HS64; local evidence drove
   these fixes. No comments were present on the retrieved article.
+
+## Kalam V1.0.0 release engineering
+
+Kalam is a reverse engineering project made by nirusaki. Workspace metadata is
+version1.0.0. GitHub Actions builds Linux x86_64 bundles on Ubuntu24.04, runs
+locked tests, format/Clippy checks and an extracted staging installer regression,
+and uploads the archive/checksum as workflow artifacts. Version tags call the
+same checks before publishing assets through the release workflow.
+
+`install.sh` delegates to the standard-library Python installer. Source builds
+run without privilege; an extracted bundle uses its included binaries. File
+installation escalates separately, writes atomically to allow upgrades of
+running executables, refreshes udev, and enables boot loading of uinput. The
+calling desktop user then starts/restarts the user service. `--enable` opts into
+autostart. `--destdir` stages files with no sudo, module/udev operations, or
+service changes. Uninstallation preserves personal configuration.
+
+`tools/package_release.py` strips copies of release binaries, bundles scripts,
+data, documentation and original license notices, and writes SHA256SUMS plus
+build provenance. Native GTK libraries are not bundled; the published build
+requires Ubuntu24.04-compatible runtime libraries. See README.md for commands.

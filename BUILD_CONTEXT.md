@@ -1,4 +1,4 @@
-# Huion HS64 Wayland — current handoff
+# Huion HS64 Wayland - current handoff
 
 Updated 2026-10-16. This replaces the stale embedded-source bundle. The repository
 files and Git history are the source of truth; do not reconstruct old source
@@ -25,7 +25,7 @@ vendor binary is executed or shipped. Binary decompilation is evidence only.
 1. Native report0x0a X/Y max32000/20400 normalize into existing canonical
    40000/25000 settings. Proximity is bit6, not bit4.
 2. Descriptor claims pressure max4095, but live values exceeded5400. Do not scale
-   raw pressure from4095: that clips firm strokes. Keep nominal0–8191 raw values.
+   raw pressure from4095: that clips firm strokes. Keep nominal0-8191 raw values.
    Captured pressure4377 is covered by regression.
 3. Vendor0x08 multiplexes pen/keys by byte1; it is not a four-key bitmask. Preserve
    Raw until vendor mode initialization and capability parsing are implemented
@@ -95,3 +95,14 @@ No restart/setup approval was needed for that fallback.
 
 Licensing has an inherited inconsistency: Cargo says GPL-3.0-or-later while the
 repository ships MIT/Apache texts. Preserve owner choice; resolve before release.
+
+## Kalam release update
+
+Workspace version is now1.0.0; project attribution is nirusaki. CI and tag-based
+release workflows live in .github/workflows/. Prebuilt archives include both
+executables, data files, install.sh/uninstall.sh, scripts/manage_install.py and
+build metadata. tools/package_release.py builds dist/ assets; packaging_e2e.py
+verifies extracted staging install/upgrade/uninstall. README.md documents easy
+installation, native runtime dependencies and CI/release use. Build outputs,
+archives and vendor reference binaries are ignored in Git and uploaded as
+release assets instead. No em dashes remain in tracked text.

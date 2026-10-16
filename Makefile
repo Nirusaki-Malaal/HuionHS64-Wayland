@@ -3,6 +3,7 @@ BINDIR ?= $(PREFIX)/bin
 UDEVDIR ?= /etc/udev/rules.d
 SYSTEMDUSERDIR ?= $(PREFIX)/lib/systemd/user
 APPDIR ?= $(PREFIX)/share/applications
+MODULESDIR ?= /etc/modules-load.d
 
 .PHONY: all build test test-kernel test-session test-lifecycle install uninstall clean
 
@@ -36,6 +37,8 @@ install: build
 	install -m 644 data/huion-wayland.service $(DESTDIR)$(SYSTEMDUSERDIR)/huion-wayland.service
 	install -d $(DESTDIR)$(APPDIR)
 	install -m 644 data/io.github.nirusaki.HuionWayland.desktop $(DESTDIR)$(APPDIR)/io.github.nirusaki.HuionWayland.desktop
+	install -d $(DESTDIR)$(MODULESDIR)
+	install -m 644 data/kalam-uinput.conf $(DESTDIR)$(MODULESDIR)/kalam-uinput.conf
 	@echo "Installation complete. Reload udev rules using: sudo udevadm control --reload && sudo udevadm trigger"
 
 uninstall:
@@ -44,6 +47,7 @@ uninstall:
 	rm -f $(DESTDIR)$(UDEVDIR)/70-huion-wayland.rules
 	rm -f $(DESTDIR)$(SYSTEMDUSERDIR)/huion-wayland.service
 	rm -f $(DESTDIR)$(APPDIR)/io.github.nirusaki.HuionWayland.desktop
+	rm -f $(DESTDIR)$(MODULESDIR)/kalam-uinput.conf
 
 clean:
 	cargo clean

@@ -1,6 +1,26 @@
-/unpacked/
+# Rust build output and packaged releases
 /target/
+/dist/
+*.tar.gz
+*.tar.xz
 *.deb
-*.log
+*.rpm
 
+# Proprietary reference package and local decompilation output
+/unpacked/
+*.log
+*.gpr
+*.rep/
+
+# Local captures, Python caches and editor state
 /huion-capture.json
+__pycache__/
+*.py[cod]
+.venv/
+.vscode/
+.idea/
+*~
+.DS_Store
+.env
+.env.*
+!.env.example

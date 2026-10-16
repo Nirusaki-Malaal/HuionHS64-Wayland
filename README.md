@@ -1,4 +1,8 @@
-# Huion HS64 on Wayland
+# Kalam V1.0.0
+
+**Kalam is a reverse engineering project made by nirusaki.**
+
+[![CI](https://github.com/Nirusaki-Malaal/HuionHS64-Wayland/actions/workflows/ci.yml/badge.svg)](https://github.com/Nirusaki-Malaal/HuionHS64-Wayland/actions/workflows/ci.yml)
 
 A Rust userspace driver and native GTK4/Libadwaita settings app for the connected
 Huion HS64 (`256c:006f`). The daemon reads HID reports and creates a Linux tablet
@@ -27,36 +31,81 @@ selection and aspect-ratio mapping belong to the compositor; tilt is not
 advertised by this HS64. See [research.md](research.md) for the evidence and
 [documentation.md](documentation.md) for implementation details and limitations.
 
-## Build and install
+## Easy installation
 
-Requires Linux, a desktop session bus, Rust **1.89 or newer** (file locking),
-GTK4, Libadwaita **1.2 or newer**, pkg-config, and the uinput kernel module.
-On Arch, the native development dependencies are `base-devel gtk4 libadwaita`.
+Download the Linux x86_64 build from [Kalam V1.0.0](https://github.com/Nirusaki-Malaal/HuionHS64-Wayland/releases/tag/v1.0.0).
+Build files are attached to the release, and CI also uploads them as workflow
+artifacts. Generated binaries and archives stay out of the Git source tree.
+
+The prebuilt release is built on **Ubuntu 24.04 x86_64**, with glibc 2.39,
+GTK4 4.14 and Libadwaita 1.5. Use Ubuntu 24.04 or newer, or a compatible current
+Linux distribution. On older distributions, build from source instead. This is
+a dynamically linked native GTK app, not a self-contained AppImage.
+
+Install runtime dependencies on Ubuntu:
 
 ```sh
-cargo build --release --workspace
-cargo test --workspace
-sudo make -o build install
-sudo udevadm control --reload
-sudo udevadm trigger --subsystem-match=input
-sudo udevadm trigger --subsystem-match=hidraw
-systemctl --user daemon-reload
-systemctl --user start huion-wayland.service
+sudo apt-get update
+sudo apt-get install -y libgtk-4-1 libadwaita-1-0 python3
+```
+
+Download, verify and install:
+
+```sh
+curl -fLO https://github.com/Nirusaki-Malaal/HuionHS64-Wayland/releases/download/v1.0.0/kalam-1.0.0-linux-x86_64.tar.gz
+curl -fLO https://github.com/Nirusaki-Malaal/HuionHS64-Wayland/releases/download/v1.0.0/SHA256SUMS
+sha256sum --check SHA256SUMS
+tar -xzf kalam-1.0.0-linux-x86_64.tar.gz
+cd kalam-1.0.0-linux-x86_64
+./install.sh
 huion-gui
 ```
 
-Build as your normal user first; `-o build` prevents the privileged install from
-rebuilding through root's Cargo environment. Installation does not enable
-autostart. To enable it explicitly:
+Run the installer as your normal desktop user. It asks for sudo only to copy
+system files, load uinput and refresh udev, then starts/restarts your user
+service. It also configures uinput to load on boot. To enable service autostart,
+use `./install.sh --enable`. To copy files without starting a service, use
+`./install.sh --no-start`.
+
+Uninstall from the extracted archive or source checkout:
 
 ```sh
-systemctl --user enable huion-wayland.service
+./uninstall.sh
 ```
+
+Uninstall stops/disables the user service and removes installed Kalam files.
+Your personal tablet settings are preserved. It does not edit keyd settings.
+Keep the extracted folder if you want to use its uninstall script later.
+
+## Build from source
+
+Requires Linux, a desktop session bus, Rust **1.89 or newer** (file locking),
+Python **3.11 or newer**, GTK4, Libadwaita **1.2 or newer**, pkg-config, and uinput.
+Install development dependencies on your distribution first:
+
+```sh
+# Ubuntu/Debian
+sudo apt-get install -y build-essential libgtk-4-dev libadwaita-1-dev pkg-config python3
+# Arch Linux
+sudo pacman -S --needed base-devel rust gtk4 libadwaita python
+```
+
+Then install from the checkout with one command:
+
+```sh
+./install.sh
+```
+
+The source installer builds with `cargo build --release --locked --workspace`
+as your normal user before escalating for system installation. If already
+built, use `./install.sh --no-build`. For an isolated packaging test, use
+`./install.sh --no-build --destdir /tmp/kalam-stage`; staging never changes
+udev, modules, your service or the live system.
 
 The service needs access to the physical tablet's hidraw **and evdev** nodes,
 and `/dev/uinput`. Rules grant these through the active seat and `input` group.
 Group changes require a new login. If another tablet driver owns the device,
-stop it before starting this daemon.
+stop it before starting Kalam.
 
 ### If you use keyd or another input remapper
 
@@ -98,7 +147,7 @@ python tools/capture_tablet.py --seconds 30 --output /tmp/hs64.json
 ```
 
 The descriptor declares pressure max 4095, but live standard-mode reports exceed
-that value. Pressure therefore passes through in the nominal 0–8191 range;
+that value. Pressure therefore passes through in the nominal 0-8191 range;
 scaling from the descriptor would clip firm strokes. Coordinates are normalized
 from native 32000 × 20400 into the existing configuration range 40000 × 25000.
 
@@ -120,6 +169,33 @@ Kernel tests grab their temporary devices before sending test events. They fail
 if a remapper owns those devices. Hardware interaction and application pressure
 response are separate from synthetic kernel tests. Validation results and
 remaining checks are recorded in [research/validation.md](research/validation.md).
+
+## CI/CD and release builds
+
+[GitHub Actions](https://github.com/Nirusaki-Malaal/HuionHS64-Wayland/actions)
+runs formatting, strict Clippy, locked workspace tests, script syntax checks,
+metadata/no-em-dash checks, release compilation, and an extracted archive
+install/upgrade/uninstall test. Every successful build uploads the binary
+bundle and SHA256SUMS as an artifact.
+
+A pushed `vX.Y.Z` tag reruns those checks and publishes a release named
+`Kalam VX.Y.Z` with the checked archive and checksum. The tag must match the
+Cargo workspace version. Only the publishing job has repository write access.
+Hardware/kernel and live-session tests remain local because hosted runners
+have no HS64 or desktop session.
+
+To build the same archive locally:
+
+```sh
+cargo build --release --locked --workspace
+python3 tools/package_release.py
+python3 tests/packaging_e2e.py
+```
+
+The output is in `dist/`. `BUILD-INFO.json` inside the archive records its source
+commit, Rust version, build distribution and native library versions. A local
+build inherits your distribution's compatibility requirements; published builds
+come from the Ubuntu CI runner.
 
 ## Repository layout
 
