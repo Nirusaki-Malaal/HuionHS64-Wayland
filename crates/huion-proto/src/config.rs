@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bezier::PressureCurve;
 use crate::packet::{HS64_MAX_X, HS64_MAX_Y};
@@ -33,19 +35,14 @@ impl Default for ActiveArea {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "type", content = "value")]
 pub enum KeyAction {
+    #[default]
     Disabled,
     Key(String),           // e.g. "KEY_Z"
     KeyCombo(Vec<String>), // e.g. ["KEY_LEFTCTRL", "KEY_Z"]
     MouseButton(u16),      // e.g. BTN_LEFT, BTN_MIDDLE, BTN_RIGHT
-}
-
-impl Default for KeyAction {
-    fn default() -> Self {
-        KeyAction::Disabled
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -163,15 +160,18 @@ impl TabletConfig {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
+        self.save_to(&Self::config_path())
+    }
+
+    fn save_to(&self, path: &Path) -> std::io::Result<()> {
         self.validate()
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
-        let path = Self::config_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let serialized = toml::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(path, serialized)
+        atomic_write(path, serialized.as_bytes())
     }
 
     pub fn transform_coordinates(&self, raw_x: u16, raw_y: u16) -> (u16, u16) {
@@ -221,5 +221,97 @@ impl TabletConfig {
                     - ((u32::from(norm_x) * u32::from(HS64_MAX_Y)) / u32::from(HS64_MAX_X)) as u16,
             ),
         }
+    }
+}
+
+// Keep the temporary file beside its destination so rename is atomic. A failed
+// write/sync/rename leaves the existing configuration untouched. create_new
+// prevents following a preexisting symlink or overwriting another writer's file.
+fn atomic_write(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let (temp_path, mut file) = loop {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp_path = parent.join(format!(
+            ".huion-config-{}-{counter}.tmp",
+            std::process::id()
+        ));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => break (temp_path, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    };
+    let result = (|| {
+        file.write_all(contents)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temp_path, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+    }
+    result
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            loop {
+                let path = std::env::temp_dir().join(format!(
+                    "huion-config-test-{}-{}",
+                    std::process::id(),
+                    COUNTER.fetch_add(1, Ordering::Relaxed)
+                ));
+                match std::fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("cannot create test directory: {error}"),
+                }
+            }
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn saving_replaces_complete_configuration_and_invalid_save_preserves_it() {
+        let directory = TempDir::new();
+        let path = directory.0.join("config.toml");
+        std::fs::write(&path, "old configuration").unwrap();
+        let mut config = TabletConfig::default();
+        config.save_to(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(toml::from_str::<TabletConfig>(&saved).unwrap(), config);
+        config.active_area.width = 0;
+        assert!(config.save_to(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn failed_rename_preserves_destination_and_cleans_temporary_file() {
+        let directory = TempDir::new();
+        let destination = directory.0.join("config.toml");
+        std::fs::create_dir(&destination).unwrap();
+        let existing = destination.join("keep");
+        std::fs::write(&existing, "original").unwrap();
+        assert!(TabletConfig::default().save_to(&destination).is_err());
+        assert_eq!(std::fs::read_to_string(existing).unwrap(), "original");
+        assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
     }
 }

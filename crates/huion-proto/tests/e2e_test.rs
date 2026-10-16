@@ -4,17 +4,19 @@ use huion_proto::packet::{parse_report, TabletReport, HS64_MAX_PRESSURE, HS64_MA
 
 #[test]
 fn test_e2e_stylus_drawing_stroke_pipeline() {
-    let mut config = TabletConfig::default();
-    config.orientation = Orientation::Normal;
-    // Set active area to top-left quadrant (20000 x 12500)
-    config.active_area = ActiveArea {
-        x: 0,
-        y: 0,
-        width: 20000,
-        height: 12500,
+    let config = TabletConfig {
+        orientation: Orientation::Normal,
+        // Set active area to top-left quadrant (20000 x 12500).
+        active_area: ActiveArea {
+            x: 0,
+            y: 0,
+            width: 20000,
+            height: 12500,
+        },
+        // Custom Bezier curve: gentle start, steep ramp.
+        pressure_curve: PressureCurve::new(0.4, 0.1, 0.7, 0.9),
+        ..TabletConfig::default()
     };
-    // Custom Bezier curve: gentle start, steep ramp
-    config.pressure_curve = PressureCurve::new(0.4, 0.1, 0.7, 0.9);
 
     // Simulate drawing stroke of 50 samples
     for step in 0..50 {
@@ -94,8 +96,10 @@ fn test_e2e_express_keys_combos() {
 
 #[test]
 fn test_e2e_left_handed_orientation_inversion() {
-    let mut config = TabletConfig::default();
-    config.orientation = Orientation::Rotate180;
+    let config = TabletConfig {
+        orientation: Orientation::Rotate180,
+        ..TabletConfig::default()
+    };
 
     // Origin (0,0) in 180 deg mode should become max extent (HS64_MAX_X, HS64_MAX_Y)
     let (tx, ty) = config.transform_coordinates(0, 0);
@@ -110,10 +114,12 @@ fn test_e2e_left_handed_orientation_inversion() {
 
 #[test]
 fn test_e2e_config_serialization_roundtrip() {
-    let mut config = TabletConfig::default();
-    config.device_name = "Huion HS64 Test Edition".to_string();
-    config.orientation = Orientation::Rotate270;
-    config.pressure_curve = PressureCurve::new(0.1, 0.2, 0.8, 0.9);
+    let mut config = TabletConfig {
+        device_name: "Huion HS64 Test Edition".to_string(),
+        orientation: Orientation::Rotate270,
+        pressure_curve: PressureCurve::new(0.1, 0.2, 0.8, 0.9),
+        ..TabletConfig::default()
+    };
     config.express_keys[0] =
         KeyAction::KeyCombo(vec!["KEY_LEFTCTRL".to_string(), "KEY_S".to_string()]); // Save
 

@@ -63,8 +63,10 @@ fn keyboard_reports_parse_all_six_usages_without_phantom_fourth_button() {
 
 #[test]
 fn quarter_turns_map_corners_within_the_advertised_axes() {
-    let mut cfg = TabletConfig::default();
-    cfg.orientation = Orientation::Rotate90;
+    let mut cfg = TabletConfig {
+        orientation: Orientation::Rotate90,
+        ..TabletConfig::default()
+    };
     assert_eq!(cfg.transform_coordinates(0, 0), (HS64_MAX_X, 0));
     assert_eq!(
         cfg.transform_coordinates(HS64_MAX_X, 0),

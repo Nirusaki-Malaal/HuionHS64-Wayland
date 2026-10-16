@@ -55,7 +55,7 @@ pub fn parse_report(data: &[u8]) -> Result<Option<TabletReport>, ProtocolError> 
     let report_id = data[0];
     match report_id {
         // Standard digitizer 0x0a and legacy pen layouts 0x07/0x09.
-        0x07 | 0x09 | 0x0a => {
+        0x07 | 0x09..=0x0a => {
             if data.len() < 8 {
                 return Err(ProtocolError::PacketTooShort {
                     expected: 8,
@@ -151,7 +151,7 @@ pub fn parse_report(data: &[u8]) -> Result<Option<TabletReport>, ProtocolError> 
         }
 
         // OEM Initialization / Handshake packets
-        0xf7 | 0xf8 | 0xf9 => Ok(Some(TabletReport::Raw(data.to_vec()))),
+        0xf7..=0xf9 => Ok(Some(TabletReport::Raw(data.to_vec()))),
 
         _ => Err(ProtocolError::UnsupportedReportId(report_id)),
     }
