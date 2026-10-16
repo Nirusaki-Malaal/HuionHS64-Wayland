@@ -1,4 +1,4 @@
-# Current investigation — 2026-10-16
+# Current investigation - 2026-10-16
 
 This section supersedes conflicting historical claims below. Fresh Ghidra
 analysis, connected descriptors, actual reports and kernel/libinput verification
@@ -11,7 +11,7 @@ Confirmed corrections:
 - Standard report 0x0a has X/Y ranges 32000/20400. Preserve saved coordinate
   settings by normalizing these into canonical 40000/25000.
 - Its descriptor pressure max 4095 is misleading: live contact reports reached
-  5473. Keep nominal 0–8191 raw pressure; scaling from 4095 clips firm strokes.
+  5473. Keep nominal 0-8191 raw pressure; scaling from 4095 clips firm strokes.
   Initial descriptor-based scaling was rejected after live evidence contradicted it.
 - Standard proximity is bit6; clearing proximity/touch clears pressure.
 - Vendor 0x08 is multiplexed, **not** a second-byte express-key mask. Ghidra

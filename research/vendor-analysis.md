@@ -93,6 +93,6 @@ library. This review intentionally does not change device state.
 
 The connected standard-mode HID descriptor advertises pressure max4095, but
 subsequent captured0x0a contact reports reached5473. The firmware contradicts
-its pressure metadata. Keep observed raw pressure in the nominal0–8191 range;
+its pressure metadata. Keep observed raw pressure in the nominal0-8191 range;
 do not normalize pressure using4095. This does not change the vendor-mode
 capability-query findings above. See hardware-evidence.json for actual samples.

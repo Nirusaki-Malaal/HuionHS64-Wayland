@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=Huion Tablet Settings
-Comment=Configure Huion HS64 graphics tablet on Wayland
+Name=Kalam Tablet Settings
+Comment=Huion HS64 on Wayland, a reverse engineering project by nirusaki
 Exec=huion-gui
 Icon=input-tablet
 Terminal=false

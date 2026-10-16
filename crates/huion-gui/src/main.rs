@@ -371,7 +371,7 @@ fn build_ui(app: &adw::Application) {
     let config = Rc::new(RefCell::new(initial));
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("Huion Tablet")
+        .title("Kalam")
         .default_width(760)
         .default_height(860)
         .build();
@@ -379,7 +379,7 @@ fn build_ui(app: &adw::Application) {
     let layout = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     let header = adw::HeaderBar::new();
     header.set_title_widget(Some(&adw::WindowTitle::new(
-        "Huion Tablet",
+        "Kalam",
         "HS64 · Pen & tablet settings",
     )));
     let apply = gtk4::Button::builder()
