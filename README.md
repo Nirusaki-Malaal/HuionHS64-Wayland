@@ -10,7 +10,7 @@ Open a terminal in your Wayland desktop and paste this, **without sudo**:
 curl -fsSL https://raw.githubusercontent.com/Nirusaki-Malaal/HuionHS64-Wayland/main/bootstrap.sh | sh -s -- --enable
 ```
 
-The installer detects your distro, installs dependencies, builds the app and starts the driver at login. It asks for your password when needed. [Special setups and uninstalling](docs/documentation.md#online-installer).
+The installer detects your distro, installs dependencies, builds the app and starts the driver at login. It asks for your password when needed. [Special setups and uninstalling](docs/DOCUMENTATION.md#online-installer).
 
 ## What it does and how to use it
 
@@ -24,7 +24,7 @@ Reverse engineering and development were AI-assisted using **GEMINI 3.8 Flash**,
 
 ## License
 
-[GPL-3.0-or-later](LICENSE). Want to know more? Read the [documentation](docs/documentation.md).
+[GPL-3.0-or-later](LICENSE). Want to know more? Read the [documentation](docs/DOCUMENTATION.md).
 
 ## Screenshots
 
@@ -37,4 +37,4 @@ Reverse engineering and development were AI-assisted using **GEMINI 3.8 Flash**,
 | Driver | 2.74 MiB | 0.17% |
 | Settings window | 49.42 MiB | 0.77% |
 
-30-second observation on Arch Linux/Wayland, with the settings window open. Results vary. [Method and raw measurements](docs/documentation.md#resource-measurements).
+30-second observation on Arch Linux/Wayland, with the settings window open. Results vary. [Method and raw measurements](docs/DOCUMENTATION.md#resource-measurements).
