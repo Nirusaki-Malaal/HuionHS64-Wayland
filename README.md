@@ -34,7 +34,7 @@ Reverse engineering and development were AI-assisted using **GEMINI 3.8 Flash**,
 
 | Component | Memory (PSS) | Idle CPU |
 | --- | ---: | ---: |
-| Driver | 3.96 MiB | 0.23% |
-| Settings window | 201.85 MiB | 0.10% |
+| Driver | 2.74 MiB | 0.17% |
+| Settings window | 49.42 MiB | 0.77% |
 
 30-second observation on Arch Linux/Wayland, with the settings window open. Results vary. [Method and raw measurements](docs/documentation.md#resource-measurements).

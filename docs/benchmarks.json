@@ -1,30 +1,30 @@
 {
-  "measured_at_utc": "2026-10-16T14:45:50.101192+00:00",
+  "measured_at_utc": "2026-10-16T15:14:11.081769+00:00",
   "workload": "Idle observation, driver running and settings window open; no scripted tablet input",
   "sample_interval_seconds": 1,
-  "duration_seconds": 30.006,
+  "duration_seconds": 30.003,
   "distribution": "Arch Linux",
   "kernel": "7.2.9-arch1-1",
   "session": "wayland",
   "cpu": "13th Gen Intel(R) Core(TM) i5-13500HX",
   "processes": {
     "huion-daemon": {
-      "pid": 187907,
+      "pid": 328760,
       "samples": 31,
-      "binary_sha256": "eb046b365bd2a0296f6d058c5e8ee0abd8808be255e9f42d8b8a809c9d1eb587",
-      "rss_median_mib": 6.48,
-      "rss_max_mib": 6.48,
-      "pss_median_mib": 3.96,
-      "cpu_percent_one_core": 0.233
+      "binary_sha256": "79b349969c19dc29b1c02ea4f9c566a79a272981eb81d1bf0f3dc7084b53124b",
+      "rss_median_mib": 5.27,
+      "rss_max_mib": 5.28,
+      "pss_median_mib": 2.74,
+      "cpu_percent_one_core": 0.167
     },
     "huion-gui": {
-      "pid": 293456,
+      "pid": 332183,
       "samples": 31,
-      "binary_sha256": "cb07a20c6b7e7f86069fe3085f240269877a739f76c3395bf6e520d8b16384f0",
-      "rss_median_mib": 262.48,
-      "rss_max_mib": 262.48,
-      "pss_median_mib": 201.85,
-      "cpu_percent_one_core": 0.1
+      "binary_sha256": "bcb4e68040a70114f3e5a93468ba6eb9e1ee42c87b435b978895823f1e23f6f4",
+      "rss_median_mib": 96.06,
+      "rss_max_mib": 96.06,
+      "pss_median_mib": 49.42,
+      "cpu_percent_one_core": 0.767
     }
   }
 }
