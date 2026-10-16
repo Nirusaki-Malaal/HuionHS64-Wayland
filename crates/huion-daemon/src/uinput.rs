@@ -57,12 +57,17 @@ impl VirtualTablet {
             .with_properties(&pen_props)?
             .build()?;
 
-        // Setup Pad device (4 express keys)
+        // Setup Pad device (4 express keys + desktop shortcuts)
         let mut pad_keys = AttributeSet::<Key>::new();
         pad_keys.insert(Key::BTN_0);
         pad_keys.insert(Key::BTN_1);
         pad_keys.insert(Key::BTN_2);
         pad_keys.insert(Key::BTN_3);
+        pad_keys.insert(Key::KEY_LEFTCTRL);
+        pad_keys.insert(Key::KEY_LEFTSHIFT);
+        pad_keys.insert(Key::KEY_Z);
+        pad_keys.insert(Key::KEY_B);
+        pad_keys.insert(Key::KEY_E);
 
         let pad_device = VirtualDeviceBuilder::new()?
             .name("Huion HS64 Wayland Pad")
@@ -102,6 +107,11 @@ impl VirtualTablet {
             InputEvent::new(EventType::KEY, Key::BTN_1.code(), if packet.key2 { 1 } else { 0 }),
             InputEvent::new(EventType::KEY, Key::BTN_2.code(), if packet.key3 { 1 } else { 0 }),
             InputEvent::new(EventType::KEY, Key::BTN_3.code(), if packet.key4 { 1 } else { 0 }),
+            InputEvent::new(EventType::KEY, Key::KEY_LEFTCTRL.code(), if packet.key1 || packet.key2 { 1 } else { 0 }),
+            InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), if packet.key2 { 1 } else { 0 }),
+            InputEvent::new(EventType::KEY, Key::KEY_Z.code(), if packet.key1 || packet.key2 { 1 } else { 0 }),
+            InputEvent::new(EventType::KEY, Key::KEY_B.code(), if packet.key3 { 1 } else { 0 }),
+            InputEvent::new(EventType::KEY, Key::KEY_E.code(), if packet.key4 { 1 } else { 0 }),
             InputEvent::new(EventType::SYNCHRONIZATION, 0, 0),
         ];
 

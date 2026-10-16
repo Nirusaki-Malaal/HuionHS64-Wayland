@@ -7,3 +7,9 @@ SUBSYSTEM=="usb", ATTRS{idVendor}=="256c", MODE="0660", GROUP="input", TAG+="uac
 
 # Allow user access to /dev/uinput for virtual tablet creation
 KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input", TAG+="uaccess"
+
+# Tell libinput to ignore the raw physical USB tablet and keyboard interfaces
+# This prevents:
+# 1. Two-pointer conflict (raw kernel mouse5/event23 fighting virtual stylus)
+# 2. Raw factory scancodes leakage (raw kernel event24 fighting custom express key bindings)
+ACTION=="add|change", SUBSYSTEM=="input", ATTRS{idVendor}=="256c", ATTRS{idProduct}=="006f", ENV{LIBINPUT_IGNORE_DEVICE}="1"

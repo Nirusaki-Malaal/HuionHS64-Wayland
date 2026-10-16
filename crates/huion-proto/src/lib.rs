@@ -74,6 +74,32 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_express_keys_report3() {
+        // Report ID 0x03: Button 1 (mod=0x05, key=0x1d)
+        let btn1_data = vec![0x03, 0x05, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let res1 = parse_report(&btn1_data).unwrap().unwrap();
+        match res1 {
+            TabletReport::ExpressKeys(k) => {
+                assert!(k.key1);
+                assert!(!k.key2);
+                assert!(!k.key3);
+                assert!(!k.key4);
+            }
+            _ => panic!("expected express keys packet"),
+        }
+
+        // Release event
+        let release_data = vec![0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let res_rel = parse_report(&release_data).unwrap().unwrap();
+        match res_rel {
+            TabletReport::ExpressKeys(k) => {
+                assert!(!k.key1 && !k.key2 && !k.key3 && !k.key4);
+            }
+            _ => panic!("expected release packet"),
+        }
+    }
+
+    #[test]
     fn test_bezier_curve_evaluation() {
         let curve = PressureCurve::default();
         // Default linear curve should return ~input

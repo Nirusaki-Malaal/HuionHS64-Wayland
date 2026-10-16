@@ -64,7 +64,8 @@ pub fn parse_report(data: &[u8]) -> Result<Option<TabletReport>, ProtocolError> 
             let touch = (status & 0x01) != 0;
             let barrel_switch = (status & 0x02) != 0;
             let eraser = (status & 0x04) != 0;
-            let in_range = (status & 0x10) != 0 || touch || barrel_switch;
+            // On UC-Logic HS64 digitizers, bit 6 (0x40) or bit 4 (0x10) indicates in-range proximity
+            let in_range = (status & 0x40) != 0 || (status & 0x10) != 0 || touch || barrel_switch || eraser;
 
             let x = u16::from_le_bytes([data[2], data[3]]);
             let y = u16::from_le_bytes([data[4], data[5]]);
@@ -89,7 +90,7 @@ pub fn parse_report(data: &[u8]) -> Result<Option<TabletReport>, ProtocolError> 
             })))
         }
 
-        // Express Key Packet
+        // Express Key Packet (Report ID 0x08 bitmask)
         0x08 => {
             if data.len() < 2 {
                 return Err(ProtocolError::PacketTooShort {
@@ -105,6 +106,54 @@ pub fn parse_report(data: &[u8]) -> Result<Option<TabletReport>, ProtocolError> 
                 key2: (mask & 0x02) != 0,
                 key3: (mask & 0x04) != 0,
                 key4: (mask & 0x08) != 0,
+            })))
+        }
+
+        // Express Key Packet (Report ID 0x03 USB HID Keyboard reports from HS64 interface 2)
+        0x03 => {
+            if data.len() < 3 {
+                return Err(ProtocolError::PacketTooShort {
+                    expected: 3,
+                    actual: data.len(),
+                });
+            }
+
+            let modifier = data[1];
+            let keycode = data[2];
+
+            if modifier == 0 && keycode == 0 {
+                return Ok(Some(TabletReport::ExpressKeys(ExpressKeyPacket {
+                    raw_mask: 0,
+                    key1: false,
+                    key2: false,
+                    key3: false,
+                    key4: false,
+                })));
+            }
+
+            // Map HS64 hardware shortcut scancodes:
+            // Button 1 (Top): 0x1d (Z / Undo)
+            // Button 2: 0x2c (Space / Hand)
+            // Button 3: 0x30 (']' / Brush+)
+            // Button 4 (Bottom): any remaining keycode like 0x2f ('[' / Brush-)
+            let (k1, k2, k3, k4) = match keycode {
+                0x1d => (true, false, false, false),
+                0x2c => (false, true, false, false),
+                0x30 => (false, false, true, false),
+                _ => (false, false, false, true),
+            };
+
+            let mask = (if k1 { 1 } else { 0 })
+                | (if k2 { 2 } else { 0 })
+                | (if k3 { 4 } else { 0 })
+                | (if k4 { 8 } else { 0 });
+
+            Ok(Some(TabletReport::ExpressKeys(ExpressKeyPacket {
+                raw_mask: mask,
+                key1: k1,
+                key2: k2,
+                key3: k3,
+                key4: k4,
             })))
         }
 
