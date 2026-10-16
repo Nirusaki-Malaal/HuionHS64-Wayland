@@ -51,7 +51,7 @@ fn build_ui(app: &Application) {
 
     // Group 2: Orientation & Mapping
     let map_group = PreferencesGroup::builder()
-        .title("Display & Orientation")
+        .title("Display and Orientation")
         .description("Coordinate mapping and left-handed mode")
         .build();
 
