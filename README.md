@@ -24,7 +24,7 @@ Reverse engineering and development were AI-assisted using **GEMINI 3.8 Flash**,
 
 ## License
 
-[GPL-3.0-or-later](LICENSE). Want to know more? Read the [documentation](docs/documentation.md).
+[GPL-3.0-or-later](LICENSE). Want to know more? Read the [documentation](docs/DOCUMENTATION.md).
 
 ## Screenshots
 
