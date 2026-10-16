@@ -1,205 +1,141 @@
-# Huion HS64 Native Wayland Driver
+# Huion HS64 on Wayland
 
-A clean-room, memory-safe, native Wayland driver stack and GTK4/Libadwaita configuration utility for the **Huion HS64** graphic tablet (and compatible UC-Logic hardware), implemented entirely in Rust.
+A Rust userspace driver and native GTK4/Libadwaita settings app for the connected
+Huion HS64 (`256c:006f`). The daemon reads HID reports and creates a Linux tablet
+and shortcut device through `/dev/uinput`; it does not use X11 or XTest injection.
 
-[![CI Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)]()
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)]()
-[![Wayland Native](https://img.shields.io/badge/Wayland-Native-purple.svg)]()
+![Settings interface](docs/images/settings.png)
 
----
+[Large pen workspace](docs/images/pen-workspace.png) ·
+[Physical button layout](docs/images/buttons.png)
 
-## The Problem with the Official Driver
+## Current behavior
 
-The official Huion Linux driver (`HuionTablet_LinuxDriver_v15.0.0.193.x86_64.deb`) was developed strictly for legacy X11 environments:
-- **Hard X11 API Dependencies**: Binary analysis reveals hardcoded imports of `XOpenDisplay`, `XWarpPointer`, `XQueryPointer`, and `XRRGetMonitors`.
-- **Foreign Process Key Injection**: Express keys are dispatched via bundled `xdotool` and `libxdo` (`XTestFakeKeyEvent`), which modern Wayland compositors reject for security.
-- **Window Property Polling**: Active window detection relies on polling `_NET_ACTIVE_WINDOW` using `xprop`, which fails completely on native Wayland clients.
-- **Root/Daemon Privilege Bloat**: The official driver relies on unconfined scripts and daemons.
+- Standard-mode pen coordinates, pressure, hover, tip and two barrel buttons.
+- Pressure response curves, tablet active-area configuration and four rotations.
+- Four configurable express buttons with shared-modifier handling and releases.
+- Native settings interface with action presets, editable custom shortcuts,
+  actual stylus pressure/stroke testing, and live driver status.
+- One daemon per user session; exclusive physical input ownership prevents
+  kernel fallback events from competing with virtual input.
+- SIGTERM/disconnect cleanup releases virtual devices and physical grabs.
 
-Under modern Wayland compositors (GNOME Mutter, KDE Plasma KWin, Sway, Hyprland), the official driver fails to map tablet coordinates, ignores pressure curves, and fails to handle express keys.
+This implementation targets the observed HS64 standard mode (`0x0a` pen,
+`0x03` keyboard). Vendor `0x08` reports are preserved but not interpreted or
+used to switch firmware modes. Other Huion models are not supported. Display
+selection and aspect-ratio mapping belong to the compositor; tilt is not
+advertised by this HS64. See [research.md](research.md) for the evidence and
+[documentation.md](documentation.md) for implementation details and limitations.
 
-See [research.md](research.md) for full binary disassembly, symbol analysis, and dependency breakdown.
+## Build and install
 
----
+Requires Linux, a desktop session bus, Rust **1.89 or newer** (file locking),
+GTK4, Libadwaita **1.2 or newer**, pkg-config, and the uinput kernel module.
+On Arch, the native development dependencies are `base-devel gtk4 libadwaita`.
 
-## Architecture & Design
-
-This project replaces the entire proprietary driver stack with a clean three-tier architecture:
-
-```
-                               ┌────────────────────────────────┐
-                               │     Hardware: Huion HS64       │
-                               │  (USB Vendor: 0x256c, HS64)    │
-                               └───────────────┬────────────────┘
-                                               │ Raw HID Reports
-                                               ▼
-                               ┌────────────────────────────────┐
-                               │       /dev/hidrawX Node        │
-                               └───────────────┬────────────────┘
-                                               │
-                        ┌──────────────────────┴───────────────────────┐
-                        │                                               │
-                        ▼                                               │
-┌──────────────────────────────────────────────┐                       │
-│             huion-daemon                     │                       │
-│  ┌─────────────────────────────────────────┐ │                       │
-│  │ 1. hidraw Reader & Packet Parser        │ │                       │
-│  ├─────────────────────────────────────────┤ │                       │
-│  │ 2. Coordinate Transformation Engine     │ │                       │
-│  │    (Active area, aspect-ratio, rotation)│ │                       │
-│  ├─────────────────────────────────────────┤ │                       │
-│  │ 3. Cubic Bézier Pressure Curve Pipeline │ │                       │
-│  ├─────────────────────────────────────────┤ │                       │
-│  │ 4. Linux Kernel /dev/uinput Emitter     │ │                       │
-│  │    - "Huion HS64 Wayland Stylus"        │ │                       │
-│  │    - "Huion HS64 Wayland Pad"           │ │                       │
-│  └────────────────────┬────────────────────┘ │                       │
-│                       │                      │                       │
-│  ┌────────────────────┴────────────────────┐ │                       │
-│  │ 5. zbus D-Bus Service Provider          │ │                       │
-│  │    org.wayland.HuionTablet              │ │                       │
-│  └────────────────────▲────────────────────┘ │                       │
-└───────────────────────┼──────────────────────┘                       │
-                        │                                              │
-                        │ D-Bus IPC (Method Calls & Signals)           │
-                        │                                              ▼
-┌───────────────────────┴──────────────────────┐        ┌──────────────────────────────┐
-│              huion-gui                       │        │   Linux Kernel Input Subsys  │
-│  ┌─────────────────────────────────────────┐ │        │   (/dev/input/event* nodes)  │
-│  │ GTK4 / Libadwaita Wayland Client        │ │        └──────────────┬───────────────┘
-│  │ - Dynamic Pressure Curve Editor         │ │                       │
-│  │ - Orientation Selector (0/90/180/270)   │ │                       ▼
-│  │ - Express Keys Action Mapper            │ │        ┌──────────────────────────────┐
-│  │ - Interactive Pressure Scratchpad       │ │        │  Wayland Compositor          │
-│  └─────────────────────────────────────────┘ │        │  (GNOME Mutter / KWin /      │
-└──────────────────────────────────────────────┘        │   Sway / Hyprland)           │
-                                                        └──────────────────────────────┘
-```
-
-### Crates Overview
-
-1. **`crates/huion-proto`**:
-   - Zero-allocation parser for Huion HS64 raw USB HID report descriptors:
-     - Stylus report IDs `0x07`, `0x09`, `0x0A` (coordinates, 8192 pressure levels, barrel buttons, eraser, proximity).
-     - Express keys report ID `0x08` (4 physical buttons bitmask).
-   - Parametric cubic Bézier pressure curve engine with binary search inversion.
-   - Coordinate rotation (0°, 90°, 180° left-handed mode, 270°) and active area mapping.
-   - TOML configuration persistence (`$XDG_CONFIG_HOME/huion-wayland/config.toml`).
-
-2. **`crates/huion-daemon`**:
-   - Asynchronous sysfs discovery and hotplug polling for Huion devices (`VID: 0x256c`).
-   - Virtual tablet generation via kernel `/dev/uinput` (`evdev` crate). Emits standard `EV_ABS` and `EV_KEY` events directly to the compositor.
-   - Native DRM/KMS monitor enumeration (`/sys/class/drm/`) eliminating XRandR.
-   - Session D-Bus service `org.wayland.HuionTablet` using `zbus 5.5`.
-
-3. **`crates/huion-gui`**:
-   - Modern GTK4 and Libadwaita graphical control panel.
-   - Live Bézier pressure curve presets (Linear, Soft, Hard, Sigmoid) with interactive visual control.
-   - Real-time pressure testing canvas (draw and inspect stroke dynamic width/opacity).
-   - Express key assignment interface.
-   - Async D-Bus client for live synchronization with `huion-daemon`.
-
----
-
-## Hardware Specifications (Huion HS64)
-
-- **Vendor ID**: `0x256c` (Huion / UC-Logic)
-- **Product ID**: `0x006d` / `0x006b`
-- **Active Area**: 160 × 102 mm (6.3 × 4.0 in)
-- **Resolution**: 5080 LPI (Max Coordinates: `X = 40000`, `Y = 25000`)
-- **Pen**: PW100 Battery-Free EMR Stylus
-- **Pressure Levels**: 8192 levels (`0` to `8191`)
-- **Express Keys**: 4 programmable physical buttons
-
----
-
-## Installation & Setup
-
-### Prerequisites
-
-Ensure the following build dependencies and runtime packages are installed (Debian/Ubuntu/Fedora/Arch):
-
-```bash
-# Debian / Ubuntu / Pop!_OS
-sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev libudev-dev
-
-# Fedora
-sudo dnf install gcc pkgconf-pkg-config gtk4-devel libadwaita-devel systemd-devel
-
-# Arch Linux
-sudo pacman -S base-devel pkgconf gtk4 libadwaita systemd-libs
-```
-
-### Building and Installing
-
-Clone the repository and build via `make`:
-
-```bash
-git clone https://github.com/Nirusaki-Malaal/HuionHS64-Wayland.git
-cd HuionHS64-Wayland
-
-# Build release binaries and install system files
-sudo make install
-```
-
-This installs:
-- Binaries: `/usr/local/bin/huion-daemon` and `/usr/local/bin/huion-gui`
-- Udev rule: `/etc/udev/rules.d/70-huion-wayland.rules` (grants user access to `/dev/uinput` and `/dev/hidraw*`)
-- Systemd user service: `/usr/local/lib/systemd/user/huion-wayland.service`
-- Desktop entry: `/usr/local/share/applications/io.github.nirusaki.HuionWayland.desktop`
-
-### Permissions & Service Activation
-
-1. **Reload udev rules** and plug in your tablet:
-   ```bash
-   sudo udevadm control --reload
-   sudo udevadm trigger
-   ```
-
-2. **Enable and start the user service**:
-   ```bash
-   systemctl --user daemon-reload
-   systemctl --user enable --now huion-wayland.service
-   ```
-
-3. **Launch the settings GUI**:
-   ```bash
-   huion-gui
-   ```
-   Or open **Huion Tablet Settings** from your application launcher.
-
----
-
-## Testing
-
-Run the full automated test suite (including unit tests and end-to-end integration tests):
-
-```bash
+```sh
+cargo build --release --workspace
 cargo test --workspace
+sudo make -o build install
+sudo udevadm control --reload
+sudo udevadm trigger --subsystem-match=input
+sudo udevadm trigger --subsystem-match=hidraw
+systemctl --user daemon-reload
+systemctl --user start huion-wayland.service
+huion-gui
 ```
 
-The test suite covers:
-- Raw packet parsing for stylus proximity, touch, barrel buttons, and eraser.
-- Express key bitmask decoding and combos.
-- Bézier curve calculations and pressure transformations.
-- 180° rotation / left-handed mode coordinate inversion.
-- Serialization and deserialization of tablet configuration profiles.
+Build as your normal user first; `-o build` prevents the privileged install from
+rebuilding through root's Cargo environment. Installation does not enable
+autostart. To enable it explicitly:
 
----
+```sh
+systemctl --user enable huion-wayland.service
+```
 
-## Technical Documentation & Protocols
+The service needs access to the physical tablet's hidraw **and evdev** nodes,
+and `/dev/uinput`. Rules grant these through the active seat and `input` group.
+Group changes require a new login. If another tablet driver owns the device,
+stop it before starting this daemon.
 
-For deep technical details on the USB HID protocol, coordinate math formulas, D-Bus API methods, and security architecture, see:
-- [Technical Documentation](documentation.md)
-- [Reverse Engineering Findings](research.md)
-- [Architecture & Implementation Plan](plan.md)
+### If you use keyd or another input remapper
 
----
+A wildcard keyd configuration can grab the physical HS64 keyboard and re-inject
+its factory shortcuts. Libinput ignore rules do not block that path. Exclude
+this tablet's IDs in the matching keyd configuration's `[ids]` section:
+
+```ini
+[ids]
+*
+-256c:006f
+```
+
+Then run `sudo keyd reload`. Back up your configuration before editing. Both
+physical and replacement devices use these IDs; all other keyboard mappings
+can remain in place. The daemon refuses to inject tablet input when it cannot
+obtain exclusive ownership. Look for `Cannot exclusively grab` in its log.
+
+## Configure and verify
+
+Open `huion-gui`. Use **Tablet** for pressure/orientation and **Buttons** to
+choose named actions beside the physical layout diagram, then click **Apply**.
+With the cable at the top, buttons1/2 are the left pair and3/4 the right pair.
+
+Open the separate **Try your pen** page for a larger expanding workspace. Its
+rotation control turns the test sheet between landscape and portrait while
+keeping strokes under the cursor; it does not change system tablet mapping.
+Draw in **Try your pen**: its meter and stroke width use actual
+stylus pressure delivered by the compositor. Mouse motion does not simulate
+pressure. Also test in your drawing app with a brush that uses pen pressure.
+
+Settings live in `$XDG_CONFIG_HOME/huion-wayland/config.toml`, falling back to
+`~/.config/huion-wayland/config.toml`. Offline saves take effect on daemon
+restart. Live saves apply through D-Bus and are persisted atomically.
+
+```sh
+journalctl --user -u huion-wayland.service -f
+python tools/capture_tablet.py --seconds 30 --output /tmp/hs64.json
+```
+
+The descriptor declares pressure max 4095, but live standard-mode reports exceed
+that value. Pressure therefore passes through in the nominal 0–8191 range;
+scaling from the descriptor would clip firm strokes. Coordinates are normalized
+from native 32000 × 20400 into the existing configuration range 40000 × 25000.
+
+## Tests
+
+```sh
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+# Requires uinput/evdev access, with the HS64 excluded from remappers:
+cargo test -p huion-daemon -- --include-ignored
+# Requires the installed running service (roundtrips existing settings):
+python tests/session_e2e.py
+# Briefly stops/restarts the service and checks ownership/fallback:
+python tests/lifecycle_e2e.py
+```
+
+Kernel tests grab their temporary devices before sending test events. They fail
+if a remapper owns those devices. Hardware interaction and application pressure
+response are separate from synthetic kernel tests. Validation results and
+remaining checks are recorded in [research/validation.md](research/validation.md).
+
+## Repository layout
+
+| Path | Purpose |
+| --- | --- |
+| `crates/huion-proto` | Report parsing, curves, rotation, validated atomic settings |
+| `crates/huion-daemon` | HID streams, exclusive ownership, virtual input, D-Bus |
+| `crates/huion-gui` | GTK/Adwaita settings and real pressure test |
+| `research/vendor-analysis.md` | Ghidra/objdump findings, hashes and addresses |
+| `tests` | Live D-Bus and service lifecycle checks |
+| `tools/capture_tablet.py` | Bounded capture of HS64 interfaces only |
 
 ## License
 
-Licensed under either of:
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
+The existing repository ships [MIT](LICENSE-MIT) and
+[Apache 2.0](LICENSE-APACHE) license texts. Cargo metadata currently declares
+GPL-3.0-or-later; this preexisting inconsistency needs an owner decision before
+a release. The supplied proprietary Huion package and decompilation dumps are
+not redistributed in this repository.

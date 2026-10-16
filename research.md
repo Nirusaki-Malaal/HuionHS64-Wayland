@@ -1,3 +1,44 @@
+# Current investigation — 2026-10-16
+
+This section supersedes conflicting historical claims below. Fresh Ghidra
+analysis, connected descriptors, actual reports and kernel/libinput verification
+are recorded in [vendor-analysis.md](research/vendor-analysis.md),
+[hardware-evidence.json](research/hardware-evidence.json), and
+[validation.md](research/validation.md).
+
+Confirmed corrections:
+
+- Standard report 0x0a has X/Y ranges 32000/20400. Preserve saved coordinate
+  settings by normalizing these into canonical 40000/25000.
+- Its descriptor pressure max 4095 is misleading: live contact reports reached
+  5473. Keep nominal 0–8191 raw pressure; scaling from 4095 clips firm strokes.
+  Initial descriptor-based scaling was rejected after live evidence contradicted it.
+- Standard proximity is bit6; clearing proximity/touch clears pressure.
+- Vendor 0x08 is multiplexed, **not** a second-byte express-key mask. Ghidra
+  confirms pen/key dispatch and USB string descriptor initialization.
+- All four known keyboard usages were captured, along with their releases.
+  Six HID usage slots must be parsed; unknown usages never imply Button4.
+- The daemon previously ignored `express_keys` settings. It now emits validated
+  configured actions with ordered, balanced shared modifiers and no duplicate
+  joystick button actions.
+- On this host, keyd's wildcard grabbed the physical HS64 keyboard and bypassed
+  libinput ignore rules. Added `-256c:006f` to its ids, with backup at
+  `/etc/keyd/default.conf.before-huion-wayland`.
+- Permanent libinput suppression was replaced by runtime physical evdev grabs,
+  a process lock, session cleanup and fail-closed injection. Stop/start and
+  duplicate-daemon tests passed; kernel fallback is restored on stop.
+- GUI now tests actual compositor pressure, has correct soft/firm response,
+  native shortcut presets/custom actions, responsive layout and truthful status.
+- Output/aspect mapping is not implemented; the daemon rejects these settings
+  instead of claiming success. Tilt is not advertised. One standard-mode HS64
+  is the supported hardware scope.
+
+The report below is the earlier investigation retained for historical context;
+its claimed hardware maxima, interface assignments and completed features must
+not override fresh evidence above.
+
+---
+
 # Reverse Engineering Report: Huion Linux Driver (v15.0.0.193) & Wayland Compatibility
 
 **Target Package**: `HuionTablet_LinuxDriver_v15.0.0.193.x86_64.deb`  

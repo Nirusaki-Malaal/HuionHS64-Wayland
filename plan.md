@@ -159,3 +159,18 @@ Each milestone will be delivered as an atomic, standalone Git commit with descri
    - Background daemon management starting automatically with the Wayland session (`default.target`).
 3. **Desktop Entry (`io.github.nirusaki.HuionWayland.desktop`)**:
    - Standard XDG desktop entry for application launcher integration.
+
+## 2026-10-16 corrective implementation status
+
+The original plan is historical intent, not a completed-feature checklist.
+Current implementation and verification are described in README.md,
+documentation.md and research/validation.md. Corrections include measured
+standard-mode parsing, balanced configured shortcuts, runtime physical ownership,
+single-instance enforcement, cleanup on disconnect/SIGTERM, validated atomic
+persistence, and a rebuilt GTK pressure/settings UI. Ghidra evidence lives in
+research/vendor-analysis.md.
+
+Remaining roadmap: capability-negotiated vendor mode, compositor-specific output
+mapping, hardware-identified button ordering across revisions, and wider
+compositor/application testing. Tilt and multiple simultaneous tablets are not
+implemented. Do not claim that the original scope is fully complete.
