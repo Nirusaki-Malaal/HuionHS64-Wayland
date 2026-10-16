@@ -6,3 +6,5 @@ KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input", TAG+="uaccess"
 # Clear the old project's persistent suppression when upgrading. Virtual nodes
 # have no USB idVendor/idProduct ancestor, so this cannot match replacement input.
 ACTION=="add|change", SUBSYSTEM=="input", ATTRS{idVendor}=="256c", ATTRS{idProduct}=="006f", ENV{LIBINPUT_IGNORE_DEVICE}=""
+# Also load uinput on tablet discovery, including desktops without systemd.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="256c", ATTR{idProduct}=="006f", RUN{builtin}+="kmod load uinput"

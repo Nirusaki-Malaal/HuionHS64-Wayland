@@ -37,8 +37,10 @@ jobs:
         run: cargo test --locked --workspace
       - name: Check installation script syntax
         run: |
-          sh -n install.sh uninstall.sh
-          python3 -m py_compile scripts/manage_install.py tools/package_release.py tools/check_project.py tests/packaging_e2e.py
+          sh -n install.sh uninstall.sh bootstrap.sh
+          python3 -m py_compile scripts/manage_install.py scripts/online_install.py tools/package_release.py tools/check_project.py tools/benchmark.py tests/packaging_e2e.py tests/online_install_test.py
+      - name: Test distro, session and non-systemd installation handling
+        run: python3 tests/online_install_test.py
       - name: Build release binaries
         run: cargo build --release --locked --workspace
       - name: Package and test extracted installer

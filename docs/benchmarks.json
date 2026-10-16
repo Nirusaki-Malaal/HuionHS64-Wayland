@@ -1,0 +1,30 @@
+{
+  "measured_at_utc": "2026-10-16T14:45:50.101192+00:00",
+  "workload": "Idle observation, driver running and settings window open; no scripted tablet input",
+  "sample_interval_seconds": 1,
+  "duration_seconds": 30.006,
+  "distribution": "Arch Linux",
+  "kernel": "7.2.9-arch1-1",
+  "session": "wayland",
+  "cpu": "13th Gen Intel(R) Core(TM) i5-13500HX",
+  "processes": {
+    "huion-daemon": {
+      "pid": 187907,
+      "samples": 31,
+      "binary_sha256": "eb046b365bd2a0296f6d058c5e8ee0abd8808be255e9f42d8b8a809c9d1eb587",
+      "rss_median_mib": 6.48,
+      "rss_max_mib": 6.48,
+      "pss_median_mib": 3.96,
+      "cpu_percent_one_core": 0.233
+    },
+    "huion-gui": {
+      "pid": 293456,
+      "samples": 31,
+      "binary_sha256": "cb07a20c6b7e7f86069fe3085f240269877a739f76c3395bf6e520d8b16384f0",
+      "rss_median_mib": 262.48,
+      "rss_max_mib": 262.48,
+      "pss_median_mib": 201.85,
+      "cpu_percent_one_core": 0.1
+    }
+  }
+}

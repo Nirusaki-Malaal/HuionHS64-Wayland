@@ -4,6 +4,8 @@ import argparse
 import os
 from pathlib import Path
 import shutil
+import signal
+import time
 import subprocess
 import sys
 import tempfile
@@ -21,6 +23,53 @@ FILES = {
 
 def service(*args):
     subprocess.run(['systemctl', '--user', *args], check=True)
+
+
+def systemd_user_available():
+    if not shutil.which('systemctl') or not Path('/run/systemd/system').exists():
+        return False
+    try:
+        return subprocess.run(['systemctl', '--user', 'show-environment'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def stop_standalone():
+    # Stop only our user's installed daemon, not other drivers or other users.
+    for process in Path('/proc').glob('[0-9]*'):
+        try:
+            if process.stat().st_uid != os.getuid():
+                continue
+            executable = os.readlink(process/'exe').removesuffix(' (deleted)')
+            if executable != '/usr/local/bin/huion-daemon':
+                continue
+            os.kill(int(process.name), signal.SIGTERM)
+            deadline = time.monotonic()+3
+            while (process/'exe').exists() and time.monotonic()<deadline:
+                time.sleep(.05)
+            if (process/'exe').exists():
+                raise RuntimeError('The old daemon did not stop; close it and retry')
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+
+
+def standalone_service(operation, enable=False):
+    config_home = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home()/'.config')
+    autostart = config_home/'autostart/io.github.nirusaki.HuionDaemon.desktop'
+    stop_standalone()
+    if operation == 'uninstall':
+        autostart.unlink(missing_ok=True)
+        return
+    if enable:
+        autostart.parent.mkdir(parents=True, exist_ok=True)
+        autostart.write_text('[Desktop Entry]\nType=Application\nName=Kalam Tablet Driver\nExec=/usr/local/bin/huion-daemon\nTerminal=false\nX-GNOME-Autostart-enabled=true\n')
+    cache = Path(os.environ.get('XDG_CACHE_HOME') or Path.home()/'.cache')/'kalam'
+    cache.mkdir(parents=True, exist_ok=True)
+    with (cache/'daemon.log').open('ab') as log:
+        process = subprocess.Popen(['/usr/local/bin/huion-daemon'], stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    time.sleep(.3)
+    if process.poll() is not None:
+        raise RuntimeError(f'Daemon failed to start; see {cache / "daemon.log"}')
 
 
 def copy_atomic(source, target):
@@ -57,6 +106,7 @@ def main():
     if manage_service and not os.environ.get('DBUS_SESSION_BUS_ADDRESS'):
         parser.error('Run in your desktop session, or use --no-start')
 
+    use_systemd = systemd_user_available() if manage_service else False
     binary_dir = ROOT / ('bin' if (ROOT / 'bin').is_dir() else 'target/release')
     if args.operation == 'install':
         if binary_dir == ROOT / 'target/release' and not args.no_build and not args.files_only:
@@ -67,12 +117,18 @@ def main():
         for source in sources.values():
             if not source.is_file():
                 parser.error(f'Missing {source}; build first or extract the complete release archive')
-    elif manage_service:
+    elif manage_service and use_systemd:
         # Stop before removing binaries, and remove any autostart symlink.
         subprocess.run(['systemctl', '--user', 'disable', '--now', 'huion-wayland.service'], check=False)
 
+    if args.operation == 'uninstall' and manage_service and not use_systemd:
+        standalone_service('uninstall')
+
     if not args.destdir and os.geteuid() != 0:
-        command = ['sudo', sys.executable, str(Path(__file__).resolve()), args.operation, '--files-only', '--no-build', '--no-start']
+        escalation = next((name for name in ('sudo', 'doas') if shutil.which(name)), None)
+        if not escalation:
+            raise RuntimeError('Install sudo or doas to copy system files')
+        command = [escalation, sys.executable, str(Path(__file__).resolve()), args.operation, '--files-only', '--no-build', '--no-start']
         subprocess.run(command, check=True)
     else:
         if not args.destdir and args.operation == 'install' and not Path('/dev/uinput').exists():
@@ -97,7 +153,10 @@ def main():
                 subprocess.run(['udevadm', 'trigger', '--action=change', str(uinput)], check=True)
             subprocess.run(['udevadm', 'settle'], check=True)
 
-    if manage_service:
+    if manage_service and not use_systemd:
+        if args.operation == 'install':
+            standalone_service('install', args.enable)
+    elif manage_service:
         service('daemon-reload')
         if args.operation == 'install':
             if args.enable:
@@ -110,7 +169,7 @@ def main():
             print('Kalam installed. Open settings with: huion-gui')
             if not manage_service:
                 print('As your desktop user: systemctl --user daemon-reload && systemctl --user restart huion-wayland.service')
-            print('If using keyd, exclude -256c:006f in its [ids] section. See README.md.')
+            print('If using keyd, exclude -256c:006f in its [ids] section. See documentation.md.')
         else:
             print('Kalam uninstalled. Your personal configuration was preserved.')
 
@@ -118,6 +177,6 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (OSError, subprocess.CalledProcessError) as error:
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f'Installation error: {error}', file=sys.stderr)
         sys.exit(1)
