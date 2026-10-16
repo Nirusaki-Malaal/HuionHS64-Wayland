@@ -19,6 +19,15 @@ const BUS_NAME: &str = "org.wayland.HuionTablet";
 const BUS_PATH: &str = "/org/wayland/HuionTablet";
 
 fn main() {
+    // Avoid loading heavy Vulkan/OpenGL shader compiler and GPU drivers (saves ~150-180MB RSS)
+    if std::env::var_os("GSK_RENDERER").is_none() {
+        std::env::set_var("GSK_RENDERER", "cairo");
+    }
+    // Limit glibc per-thread memory arenas
+    if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
+        std::env::set_var("MALLOC_ARENA_MAX", "2");
+    }
+
     let app = adw::Application::builder().application_id(APP_ID).build();
     app.connect_activate(|app| {
         if let Some(window) = app.active_window() {
@@ -213,48 +222,45 @@ enum WorkerMessage {
     Applied(Result<String, String>),
 }
 
-/// D-Bus and disk operations stay off the GTK main thread.
+/// D-Bus and disk operations stay off the GTK main thread using a single lean background worker.
 fn start_worker() -> (mpsc::Sender<TabletConfig>, mpsc::Receiver<WorkerMessage>) {
     let (requests, incoming) = mpsc::channel::<TabletConfig>();
     let (outgoing, results) = mpsc::channel();
     std::thread::spawn(move || {
-        let runtime = match tokio::runtime::Runtime::new() {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                let _ = outgoing.send(WorkerMessage::Status(Err(error.to_string())));
-                return;
-            }
-        };
+        let conn = zbus::blocking::Connection::session().ok();
         loop {
-            let status = runtime.block_on(async {
-                tokio::time::timeout(Duration::from_secs(2), async {
-                    let connection = zbus::Connection::session()
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    let reply = connection
-                        .call_method(
-                            Some(BUS_NAME),
-                            BUS_PATH,
-                            Some(BUS_NAME),
-                            "GetDeviceInfo",
-                            &(),
-                        )
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    let json: String = reply.body().deserialize().map_err(|e| e.to_string())?;
-                    let info: serde_json::Value =
-                        serde_json::from_str(&json).map_err(|e| e.to_string())?;
-                    Ok(info["connected"].as_bool().unwrap_or(false))
-                })
-                .await
-                .map_err(|_| "Driver did not respond".to_string())?
-            });
+            let status = if let Some(ref connection) = conn {
+                match connection.call_method(
+                    Some(BUS_NAME),
+                    BUS_PATH,
+                    Some(BUS_NAME),
+                    "GetDeviceInfo",
+                    &(),
+                ) {
+                    Ok(reply) => {
+                        if let Ok(json) = reply.body().deserialize::<String>() {
+                            if let Ok(info) = serde_json::from_str::<serde_json::Value>(&json) {
+                                Ok(info["connected"].as_bool().unwrap_or(false))
+                            } else {
+                                Ok(false)
+                            }
+                        } else {
+                            Ok(false)
+                        }
+                    }
+                    Err(e) => Err(e.to_string()),
+                }
+            } else {
+                Err("Driver service not found on session bus".to_string())
+            };
+
             if outgoing.send(WorkerMessage::Status(status)).is_err() {
                 break;
             }
+
             match incoming.recv_timeout(Duration::from_secs(3)) {
                 Ok(config) => {
-                    let result = runtime.block_on(apply_config(config));
+                    let result = apply_config_sync(&config, conn.as_ref());
                     if outgoing.send(WorkerMessage::Applied(result)).is_err() {
                         break;
                     }
@@ -267,41 +273,32 @@ fn start_worker() -> (mpsc::Sender<TabletConfig>, mpsc::Receiver<WorkerMessage>)
     (requests, results)
 }
 
-async fn apply_config(config: TabletConfig) -> Result<String, String> {
+fn apply_config_sync(config: &TabletConfig, conn: Option<&zbus::blocking::Connection>) -> Result<String, String> {
     config.validate()?;
-    let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
-    let live = tokio::time::timeout(Duration::from_secs(3), async {
-        let connection = zbus::Connection::session()
-            .await
-            .map_err(|e| e.to_string())?;
-        let reply = connection
-            .call_method(
-                Some(BUS_NAME),
-                BUS_PATH,
-                Some(BUS_NAME),
-                "SetConfig",
-                &(json,),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        reply
-            .body()
-            .deserialize::<bool>()
-            .map_err(|e| e.to_string())
-    })
-    .await;
-    match live {
-        Ok(Ok(true)) => Ok("Settings applied to the driver".into()),
-        Ok(Ok(false)) => {
-            Err("The driver rejected these settings. Check key names and the driver log.".into())
-        }
-        _ => {
-            config
-                .save()
-                .map_err(|e| format!("Could not save settings: {e}"))?;
-            Ok("Settings saved locally. Start or restart the driver to apply them.".into())
+    let json = serde_json::to_string(config).map_err(|e| e.to_string())?;
+
+    if let Some(connection) = conn {
+        if let Ok(reply) = connection.call_method(
+            Some(BUS_NAME),
+            BUS_PATH,
+            Some(BUS_NAME),
+            "SetConfig",
+            &(json,),
+        ) {
+            if let Ok(ok) = reply.body().deserialize::<bool>() {
+                if ok {
+                    return Ok("Settings applied to the driver".into());
+                } else {
+                    return Err("The driver rejected these settings. Check key names and the driver log.".into());
+                }
+            }
         }
     }
+
+    config
+        .save()
+        .map_err(|e| format!("Could not save settings: {e}"))?;
+    Ok("Settings saved locally. Start or restart the driver to apply them.".into())
 }
 
 /// Old versions exposed mapping switches without implementing them. Keep the
@@ -704,6 +701,13 @@ fn build_ui(app: &adw::Application) {
         gtk4::glib::ControlFlow::Continue
     });
     window.present();
+    #[cfg(target_os = "linux")]
+    unsafe {
+        extern "C" {
+            fn malloc_trim(pad: usize) -> i32;
+        }
+        malloc_trim(0);
+    }
 }
 
 #[cfg(test)]
