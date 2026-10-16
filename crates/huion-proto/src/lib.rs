@@ -19,7 +19,9 @@ mod tests {
         let x_bytes = 10000u16.to_le_bytes();
         let y_bytes = 5000u16.to_le_bytes();
         let p_bytes = 0u16.to_le_bytes();
-        let data = vec![0x07, 0x10, x_bytes[0], x_bytes[1], y_bytes[0], y_bytes[1], p_bytes[0], p_bytes[1]];
+        let data = vec![
+            0x07, 0x10, x_bytes[0], x_bytes[1], y_bytes[0], y_bytes[1], p_bytes[0], p_bytes[1],
+        ];
 
         let res = parse_report(&data).unwrap().unwrap();
         match res {
@@ -41,7 +43,9 @@ mod tests {
         let x_bytes = 20000u16.to_le_bytes();
         let y_bytes = 12000u16.to_le_bytes();
         let p_bytes = 4096u16.to_le_bytes();
-        let data = vec![0x09, 0x03, x_bytes[0], x_bytes[1], y_bytes[0], y_bytes[1], p_bytes[0], p_bytes[1]];
+        let data = vec![
+            0x09, 0x03, x_bytes[0], x_bytes[1], y_bytes[0], y_bytes[1], p_bytes[0], p_bytes[1],
+        ];
 
         let res = parse_report(&data).unwrap().unwrap();
         match res {
@@ -58,19 +62,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_express_keys() {
-        // Report ID 0x08, Key 1 and Key 3 pressed (mask: 0x01 | 0x04 = 0x05)
-        let data = vec![0x08, 0x05, 0x00, 0x00];
-        let res = parse_report(&data).unwrap().unwrap();
-        match res {
-            TabletReport::ExpressKeys(k) => {
-                assert!(k.key1);
-                assert!(!k.key2);
-                assert!(k.key3);
-                assert!(!k.key4);
-            }
-            _ => panic!("expected express keys packet"),
-        }
+    fn vendor_report_is_not_misidentified_as_buttons() {
+        let data = [0x08, 0x05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(
+            parse_report(&data),
+            Ok(Some(TabletReport::Raw(data.to_vec())))
+        );
     }
 
     #[test]

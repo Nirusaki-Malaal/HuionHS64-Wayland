@@ -1,8 +1,6 @@
 use huion_proto::bezier::PressureCurve;
 use huion_proto::config::{ActiveArea, KeyAction, Orientation, TabletConfig};
-use huion_proto::packet::{
-    parse_report, TabletReport, HS64_MAX_PRESSURE, HS64_MAX_X, HS64_MAX_Y,
-};
+use huion_proto::packet::{parse_report, TabletReport, HS64_MAX_PRESSURE, HS64_MAX_X, HS64_MAX_Y};
 
 #[test]
 fn test_e2e_stylus_drawing_stroke_pipeline() {
@@ -55,7 +53,9 @@ fn test_e2e_stylus_drawing_stroke_pipeline() {
                 assert_eq!(mapped_y, expected_mapped_y);
 
                 // Run through pressure curve calibration pipeline
-                let calibrated_p = config.pressure_curve.map_pressure(stylus.pressure, HS64_MAX_PRESSURE);
+                let calibrated_p = config
+                    .pressure_curve
+                    .map_pressure(stylus.pressure, HS64_MAX_PRESSURE);
                 assert!(calibrated_p <= HS64_MAX_PRESSURE);
                 if raw_pressure > 0 {
                     assert!(calibrated_p > 0);
@@ -70,7 +70,12 @@ fn test_e2e_stylus_drawing_stroke_pipeline() {
 fn test_e2e_express_keys_combos() {
     // Test all 16 button combinations (2^4)
     for mask in 0u8..16 {
-        let packet_bytes = [0x08, mask, 0x00, 0x00];
+        let mut packet_bytes = [0x03, 0, 0, 0, 0, 0, 0, 0];
+        for (index, usage) in [0x1d, 0x2c, 0x30, 0x2f].iter().enumerate() {
+            if mask & (1 << index) != 0 {
+                packet_bytes[2 + index] = *usage;
+            }
+        }
         let parsed = parse_report(&packet_bytes).expect("parser should succeed");
         assert!(parsed.is_some());
 
@@ -109,10 +114,12 @@ fn test_e2e_config_serialization_roundtrip() {
     config.device_name = "Huion HS64 Test Edition".to_string();
     config.orientation = Orientation::Rotate270;
     config.pressure_curve = PressureCurve::new(0.1, 0.2, 0.8, 0.9);
-    config.express_keys[0] = KeyAction::KeyCombo(vec!["KEY_LEFTCTRL".to_string(), "KEY_S".to_string()]); // Save
+    config.express_keys[0] =
+        KeyAction::KeyCombo(vec!["KEY_LEFTCTRL".to_string(), "KEY_S".to_string()]); // Save
 
     let toml_str = toml::to_string_pretty(&config).expect("should serialize to toml");
-    let deserialized: TabletConfig = toml::from_str(&toml_str).expect("should deserialize from toml");
+    let deserialized: TabletConfig =
+        toml::from_str(&toml_str).expect("should deserialize from toml");
 
     assert_eq!(config, deserialized);
 }

@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 use crate::bezier::PressureCurve;
 use crate::packet::{HS64_MAX_X, HS64_MAX_Y};
@@ -8,10 +8,10 @@ use crate::packet::{HS64_MAX_X, HS64_MAX_Y};
 #[serde(rename_all = "snake_case")]
 pub enum Orientation {
     #[default]
-    Normal,     // 0 degrees
-    Rotate90,   // 90 degrees clockwise (Portrait)
-    Rotate180,  // 180 degrees (Left-Handed mode)
-    Rotate270,  // 270 degrees clockwise
+    Normal, // 0 degrees
+    Rotate90,  // 90 degrees clockwise (Portrait)
+    Rotate180, // 180 degrees (Left-Handed mode)
+    Rotate270, // 270 degrees clockwise
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -37,9 +37,9 @@ impl Default for ActiveArea {
 #[serde(tag = "type", content = "value")]
 pub enum KeyAction {
     Disabled,
-    Key(String),                   // e.g. "KEY_Z"
-    KeyCombo(Vec<String>),         // e.g. ["KEY_LEFTCTRL", "KEY_Z"]
-    MouseButton(u16),             // e.g. BTN_LEFT, BTN_MIDDLE, BTN_RIGHT
+    Key(String),           // e.g. "KEY_Z"
+    KeyCombo(Vec<String>), // e.g. ["KEY_LEFTCTRL", "KEY_Z"]
+    MouseButton(u16),      // e.g. BTN_LEFT, BTN_MIDDLE, BTN_RIGHT
 }
 
 impl Default for KeyAction {
@@ -83,6 +83,61 @@ impl Default for TabletConfig {
 }
 
 impl TabletConfig {
+    /// Validate values before persisting or applying configuration. The daemon
+    /// additionally checks key names against its actual evdev capabilities.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.device_name.trim().is_empty() {
+            return Err("device_name must not be empty".into());
+        }
+        let area = self.active_area;
+        if area.width == 0 || area.height == 0 {
+            return Err("active area width and height must be positive".into());
+        }
+        if u32::from(area.x) + u32::from(area.width) > u32::from(HS64_MAX_X)
+            || u32::from(area.y) + u32::from(area.height) > u32::from(HS64_MAX_Y)
+        {
+            return Err("active area must fit within the tablet bounds".into());
+        }
+        for point in [self.pressure_curve.p1, self.pressure_curve.p2] {
+            if !point.x.is_finite()
+                || !point.y.is_finite()
+                || !(0.0..=1.0).contains(&point.x)
+                || !(0.0..=1.0).contains(&point.y)
+            {
+                return Err("pressure curve points must be finite values between 0 and 1".into());
+            }
+        }
+        if self
+            .target_output
+            .as_ref()
+            .is_some_and(|name| name.trim().is_empty())
+        {
+            return Err("target_output must not be empty".into());
+        }
+        fn valid_key(name: &str) -> bool {
+            name.strip_prefix("KEY_").is_some_and(|suffix| {
+                !suffix.is_empty()
+                    && suffix
+                        .bytes()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
+            })
+        }
+        for (index, action) in self.express_keys.iter().enumerate() {
+            let valid = match action {
+                KeyAction::Disabled => true,
+                KeyAction::Key(name) => valid_key(name),
+                KeyAction::KeyCombo(keys) => {
+                    !keys.is_empty() && keys.iter().all(|name| valid_key(name))
+                }
+                KeyAction::MouseButton(code) => (272..=279).contains(code),
+            };
+            if !valid {
+                return Err(format!("invalid action for express key {}", index + 1));
+            }
+        }
+        Ok(())
+    }
+
     pub fn config_path() -> PathBuf {
         let base = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
@@ -98,7 +153,9 @@ impl TabletConfig {
         if path.exists() {
             if let Ok(content) = std::fs::read_to_string(&path) {
                 if let Ok(cfg) = toml::from_str::<TabletConfig>(&content) {
-                    return cfg;
+                    if cfg.validate().is_ok() {
+                        return cfg;
+                    }
                 }
             }
         }
@@ -106,6 +163,8 @@ impl TabletConfig {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
+        self.validate()
+            .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         let path = Self::config_path();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -117,8 +176,14 @@ impl TabletConfig {
 
     pub fn transform_coordinates(&self, raw_x: u16, raw_y: u16) -> (u16, u16) {
         // Clamp to active area
-        let clamped_x = raw_x.clamp(self.active_area.x, self.active_area.x.saturating_add(self.active_area.width));
-        let clamped_y = raw_y.clamp(self.active_area.y, self.active_area.y.saturating_add(self.active_area.height));
+        let clamped_x = raw_x.clamp(
+            self.active_area.x,
+            self.active_area.x.saturating_add(self.active_area.width),
+        );
+        let clamped_y = raw_y.clamp(
+            self.active_area.y,
+            self.active_area.y.saturating_add(self.active_area.height),
+        );
 
         // Normalize to 0..HS64_MAX_X, 0..HS64_MAX_Y
         let rel_x = clamped_x.saturating_sub(self.active_area.x);
@@ -139,9 +204,22 @@ impl TabletConfig {
         // Apply orientation rotation
         match self.orientation {
             Orientation::Normal => (norm_x, norm_y),
-            Orientation::Rotate180 => (HS64_MAX_X.saturating_sub(norm_x), HS64_MAX_Y.saturating_sub(norm_y)),
-            Orientation::Rotate90 => (HS64_MAX_X.saturating_sub(norm_y), norm_x),
-            Orientation::Rotate270 => (norm_y, HS64_MAX_Y.saturating_sub(norm_x)),
+            Orientation::Rotate180 => (
+                HS64_MAX_X.saturating_sub(norm_x),
+                HS64_MAX_Y.saturating_sub(norm_y),
+            ),
+            // Rotate in normalized space, then restore each output axis's
+            // own range. Swapping raw X/Y overflowed the shorter Y axis.
+            Orientation::Rotate90 => (
+                HS64_MAX_X
+                    - ((u32::from(norm_y) * u32::from(HS64_MAX_X)) / u32::from(HS64_MAX_Y)) as u16,
+                ((u32::from(norm_x) * u32::from(HS64_MAX_Y)) / u32::from(HS64_MAX_X)) as u16,
+            ),
+            Orientation::Rotate270 => (
+                ((u32::from(norm_y) * u32::from(HS64_MAX_X)) / u32::from(HS64_MAX_Y)) as u16,
+                HS64_MAX_Y
+                    - ((u32::from(norm_x) * u32::from(HS64_MAX_Y)) / u32::from(HS64_MAX_X)) as u16,
+            ),
         }
     }
 }
