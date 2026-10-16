@@ -1,120 +1,420 @@
-use std::io;
 use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{
-    AbsoluteAxisType, AttributeSet, BusType, EventType, InputEvent,
-    InputId, Key, PropType, UinputAbsSetup,
+    AbsoluteAxisType as Abs, AttributeSet, BusType, EventType, InputEvent, InputId, Key,
+    RelativeAxisType, UinputAbsSetup,
 };
-use huion_proto::config::TabletConfig;
-use huion_proto::packet::{ExpressKeyPacket, StylusPacket, HS64_MAX_PRESSURE, HS64_MAX_X, HS64_MAX_Y};
+use huion_proto::config::{KeyAction, TabletConfig};
+use huion_proto::packet::{
+    ExpressKeyPacket, StylusPacket, HS64_MAX_PRESSURE, HS64_MAX_X, HS64_MAX_Y,
+};
+use std::{collections::BTreeSet, io, str::FromStr};
 
 pub struct VirtualTablet {
     pen_device: VirtualDevice,
     pad_device: VirtualDevice,
+    shortcuts: ShortcutState,
+}
+
+/// One virtual keyboard owns the union of all held pad actions. This keeps shared
+/// modifiers held until their last owner releases and releases keys before modifiers.
+#[derive(Default)]
+struct ShortcutState {
+    held: Vec<Key>,
+}
+
+fn action_keys(action: &KeyAction) -> Result<Vec<Key>, String> {
+    let names = match action {
+        KeyAction::Disabled => return Ok(vec![]),
+        KeyAction::Key(name) => vec![name.as_str()],
+        KeyAction::KeyCombo(names) => names.iter().map(String::as_str).collect(),
+        KeyAction::MouseButton(code) if (272..=279).contains(code) => {
+            return Ok(vec![Key::new(*code)])
+        }
+        KeyAction::MouseButton(_) => {
+            return Err("Mouse button must be BTN_LEFT through BTN_TASK".into())
+        }
+    };
+    names
+        .into_iter()
+        .map(|name| {
+            let key = Key::from_str(name).map_err(|_| format!("Unknown Linux key: {name}"))?;
+            if !name.starts_with("KEY_") || key.code() == 0 || key.code() >= 0x300 {
+                return Err(format!("Unsupported keyboard key: {name}"));
+            }
+            Ok(key)
+        })
+        .collect()
+}
+
+pub fn validate_config(config: &TabletConfig) -> Result<(), String> {
+    config.validate()?;
+    for action in &config.express_keys {
+        action_keys(action)?;
+    }
+    if config.target_output.is_some() || config.aspect_ratio_locked {
+        return Err("Output mapping and aspect ratio must be configured in your compositor".into());
+    }
+    Ok(())
+}
+
+fn modifier(key: Key) -> bool {
+    matches!(
+        key,
+        Key::KEY_LEFTCTRL
+            | Key::KEY_RIGHTCTRL
+            | Key::KEY_LEFTSHIFT
+            | Key::KEY_RIGHTSHIFT
+            | Key::KEY_LEFTALT
+            | Key::KEY_RIGHTALT
+            | Key::KEY_LEFTMETA
+            | Key::KEY_RIGHTMETA
+    )
+}
+
+impl ShortcutState {
+    fn update(
+        &mut self,
+        packet: ExpressKeyPacket,
+        config: &TabletConfig,
+    ) -> io::Result<Vec<InputEvent>> {
+        let mut desired = BTreeSet::new();
+        for (pressed, action) in [packet.key1, packet.key2, packet.key3, packet.key4]
+            .into_iter()
+            .zip(&config.express_keys)
+        {
+            if pressed {
+                for key in action_keys(action)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
+                {
+                    desired.insert(key.code());
+                }
+            }
+        }
+        let mut next: Vec<Key> = desired.into_iter().map(Key::new).collect();
+        next.sort_by_key(|k| (!modifier(*k), k.code()));
+        let mut events = Vec::new();
+        // Changing modifiers while a shared key stays held needs a fresh key-down
+        // (e.g. Undo -> Redo: Z up, Shift down, Z down).
+        let modifiers_changed = self
+            .held
+            .iter()
+            .filter(|k| modifier(**k))
+            .collect::<Vec<_>>()
+            != next.iter().filter(|k| modifier(**k)).collect::<Vec<_>>();
+        for key in self.held.iter().rev() {
+            if !next.contains(key) || (modifiers_changed && !modifier(*key)) {
+                events.push(InputEvent::new(EventType::KEY, key.code(), 0));
+            }
+        }
+        for key in &next {
+            if !self.held.contains(key) || (modifiers_changed && !modifier(*key)) {
+                events.push(InputEvent::new(EventType::KEY, key.code(), 1));
+            }
+        }
+        self.held = next;
+        Ok(events)
+    }
+}
+
+fn stylus_events(packet: StylusPacket, config: &TabletConfig) -> Vec<InputEvent> {
+    let (x, y) = config.transform_coordinates(packet.x, packet.y);
+    let pressure = if packet.in_range && packet.touch {
+        config
+            .pressure_curve
+            .map_pressure(packet.pressure, HS64_MAX_PRESSURE)
+    } else {
+        0
+    };
+    // Touch is first, as required for evdev event ordering. No explicit SYN:
+    // VirtualDevice::emit already appends one SYN_REPORT per frame.
+    vec![
+        InputEvent::new(
+            EventType::KEY,
+            Key::BTN_TOUCH.code(),
+            (packet.in_range && packet.touch) as i32,
+        ),
+        InputEvent::new(
+            EventType::KEY,
+            Key::BTN_TOOL_PEN.code(),
+            packet.in_range as i32,
+        ),
+        InputEvent::new(
+            EventType::KEY,
+            Key::BTN_STYLUS.code(),
+            (packet.in_range && packet.barrel_switch) as i32,
+        ),
+        InputEvent::new(
+            EventType::KEY,
+            Key::BTN_STYLUS2.code(),
+            (packet.in_range && packet.eraser) as i32,
+        ),
+        InputEvent::new(EventType::ABSOLUTE, Abs::ABS_X.0, x as i32),
+        InputEvent::new(EventType::ABSOLUTE, Abs::ABS_Y.0, y as i32),
+        InputEvent::new(EventType::ABSOLUTE, Abs::ABS_PRESSURE.0, pressure as i32),
+    ]
 }
 
 impl VirtualTablet {
     pub fn new() -> io::Result<Self> {
-        // Setup pen absolute axes
-        let abs_x = UinputAbsSetup::new(
-            AbsoluteAxisType::ABS_X,
-            evdev::AbsInfo::new(0, 0, HS64_MAX_X as i32, 0, 0, 200),
-        );
-        let abs_y = UinputAbsSetup::new(
-            AbsoluteAxisType::ABS_Y,
-            evdev::AbsInfo::new(0, 0, HS64_MAX_Y as i32, 0, 0, 200),
-        );
-        let abs_pressure = UinputAbsSetup::new(
-            AbsoluteAxisType::ABS_PRESSURE,
-            evdev::AbsInfo::new(0, 0, HS64_MAX_PRESSURE as i32, 0, 0, 0),
-        );
-        let abs_tilt_x = UinputAbsSetup::new(
-            AbsoluteAxisType::ABS_TILT_X,
-            evdev::AbsInfo::new(0, -60, 60, 0, 0, 0),
-        );
-        let abs_tilt_y = UinputAbsSetup::new(
-            AbsoluteAxisType::ABS_TILT_Y,
-            evdev::AbsInfo::new(0, -60, 60, 0, 0, 0),
-        );
-
+        let axis = |kind, max, resolution| {
+            UinputAbsSetup::new(kind, evdev::AbsInfo::new(0, 0, max, 0, 0, resolution))
+        };
         let mut pen_keys = AttributeSet::<Key>::new();
-        pen_keys.insert(Key::BTN_TOOL_PEN);
-        pen_keys.insert(Key::BTN_TOUCH);
-        pen_keys.insert(Key::BTN_STYLUS);
-        pen_keys.insert(Key::BTN_STYLUS2);
-
-        let mut pen_props = AttributeSet::<PropType>::new();
-        pen_props.insert(PropType::DIRECT);
-
+        for key in [
+            Key::BTN_TOOL_PEN,
+            Key::BTN_TOUCH,
+            Key::BTN_STYLUS,
+            Key::BTN_STYLUS2,
+        ] {
+            pen_keys.insert(key);
+        }
+        // BUS_VIRTUAL and no DIRECT property: HS64 is an external pen tablet,
+        // not a screen digitizer. Do not masquerade as another Huion USB model.
         let pen_device = VirtualDeviceBuilder::new()?
             .name("Huion HS64 Wayland Stylus")
-            .input_id(InputId::new(BusType::BUS_USB, 0x256c, 0x006d, 1))
+            .input_id(InputId::new(BusType::BUS_VIRTUAL, 0x256c, 0x006f, 2))
             .with_keys(&pen_keys)?
-            .with_absolute_axis(&abs_x)?
-            .with_absolute_axis(&abs_y)?
-            .with_absolute_axis(&abs_pressure)?
-            .with_absolute_axis(&abs_tilt_x)?
-            .with_absolute_axis(&abs_tilt_y)?
-            .with_properties(&pen_props)?
+            .with_absolute_axis(&axis(Abs::ABS_X, HS64_MAX_X as i32, 250))?
+            .with_absolute_axis(&axis(Abs::ABS_Y, HS64_MAX_Y as i32, 245))?
+            .with_absolute_axis(&axis(Abs::ABS_PRESSURE, HS64_MAX_PRESSURE as i32, 0))?
             .build()?;
-
-        // Setup Pad device (4 express keys + desktop shortcuts)
         let mut pad_keys = AttributeSet::<Key>::new();
-        pad_keys.insert(Key::BTN_0);
-        pad_keys.insert(Key::BTN_1);
-        pad_keys.insert(Key::BTN_2);
-        pad_keys.insert(Key::BTN_3);
-        pad_keys.insert(Key::KEY_LEFTCTRL);
-        pad_keys.insert(Key::KEY_LEFTSHIFT);
-        pad_keys.insert(Key::KEY_Z);
-        pad_keys.insert(Key::KEY_B);
-        pad_keys.insert(Key::KEY_E);
-
+        // Advertise configurable keyboard and mouse actions, without BTN_0..3
+        // joystick codes that can cause duplicate actions in tablet-aware apps.
+        for code in 1..0x300 {
+            let key = Key::new(code);
+            if format!("{key:?}").starts_with("KEY_") {
+                pad_keys.insert(key);
+            }
+        }
+        for code in 272..=279 {
+            pad_keys.insert(Key::new(code));
+        }
+        let mut relative_axes = AttributeSet::<RelativeAxisType>::new();
+        relative_axes.insert(RelativeAxisType::REL_X);
+        relative_axes.insert(RelativeAxisType::REL_Y);
         let pad_device = VirtualDeviceBuilder::new()?
-            .name("Huion HS64 Wayland Pad")
-            .input_id(InputId::new(BusType::BUS_USB, 0x256c, 0x006d, 1))
+            .name("Huion HS64 Wayland Shortcuts")
+            .input_id(InputId::new(BusType::BUS_VIRTUAL, 0x256c, 0x006f, 2))
             .with_keys(&pad_keys)?
+            .with_relative_axes(&relative_axes)?
             .build()?;
-
         Ok(Self {
             pen_device,
             pad_device,
+            shortcuts: ShortcutState::default(),
         })
     }
-
     pub fn emit_stylus(&mut self, packet: StylusPacket, config: &TabletConfig) -> io::Result<()> {
-        let (x, y) = config.transform_coordinates(packet.x, packet.y);
-        let pressure = config.pressure_curve.map_pressure(packet.pressure, HS64_MAX_PRESSURE);
+        self.pen_device.emit(&stylus_events(packet, config))
+    }
+    pub fn emit_express_keys(
+        &mut self,
+        packet: ExpressKeyPacket,
+        config: &TabletConfig,
+    ) -> io::Result<()> {
+        let events = self.shortcuts.update(packet, config)?;
+        if !events.is_empty() {
+            self.pad_device.emit(&events)?;
+        }
+        Ok(())
+    }
+}
 
-        let events = [
-            InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_X.0, x as i32),
-            InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_Y.0, y as i32),
-            InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_PRESSURE.0, pressure as i32),
-            InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_TILT_X.0, packet.tilt_x as i32),
-            InputEvent::new(EventType::ABSOLUTE, AbsoluteAxisType::ABS_TILT_Y.0, packet.tilt_y as i32),
-            InputEvent::new(EventType::KEY, Key::BTN_TOOL_PEN.code(), if packet.in_range { 1 } else { 0 }),
-            InputEvent::new(EventType::KEY, Key::BTN_TOUCH.code(), if packet.touch { 1 } else { 0 }),
-            InputEvent::new(EventType::KEY, Key::BTN_STYLUS.code(), if packet.barrel_switch { 1 } else { 0 }),
-            InputEvent::new(EventType::KEY, Key::BTN_STYLUS2.code(), if packet.eraser { 1 } else { 0 }),
-            InputEvent::new(EventType::SYNCHRONIZATION, 0, 0),
-        ];
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn packet(mask: u8) -> ExpressKeyPacket {
+        ExpressKeyPacket {
+            raw_mask: mask,
+            key1: mask & 1 != 0,
+            key2: mask & 2 != 0,
+            key3: mask & 4 != 0,
+            key4: mask & 8 != 0,
+        }
+    }
+    fn tuples(events: Vec<InputEvent>) -> Vec<(u16, i32)> {
+        events.iter().map(|e| (e.code(), e.value())).collect()
+    }
+    #[test]
+    fn shortcut_edges_order_and_shared_modifiers() {
+        let cfg = TabletConfig::default();
+        let mut state = ShortcutState::default();
+        assert_eq!(
+            tuples(state.update(packet(1), &cfg).unwrap()),
+            vec![(29, 1), (44, 1)]
+        );
+        assert!(state.update(packet(1), &cfg).unwrap().is_empty());
+        assert_eq!(
+            tuples(state.update(packet(2), &cfg).unwrap()),
+            vec![(44, 0), (42, 1), (44, 1)]
+        );
+        assert_eq!(
+            tuples(state.update(packet(0), &cfg).unwrap()),
+            vec![(44, 0), (42, 0), (29, 0)]
+        );
+    }
+    #[test]
+    fn configured_disabled_and_custom_keys_work() {
+        let mut cfg = TabletConfig::default();
+        let mut state = ShortcutState::default();
+        cfg.express_keys[0] = KeyAction::Disabled;
+        assert!(state.update(packet(1), &cfg).unwrap().is_empty());
+        cfg.express_keys[0] = KeyAction::Key("KEY_SPACE".into());
+        assert_eq!(
+            tuples(state.update(packet(1), &cfg).unwrap()),
+            vec![(57, 1)]
+        );
+        cfg.express_keys[0] = KeyAction::Key("KEY_DOES_NOT_EXIST".into());
+        assert!(validate_config(&cfg).is_err());
+    }
+    #[test]
+    fn hover_and_proximity_out_clear_pressure_and_buttons() {
+        let cfg = TabletConfig::default();
+        let mut p = StylusPacket {
+            x: 100,
+            y: 200,
+            pressure: HS64_MAX_PRESSURE,
+            touch: true,
+            barrel_switch: true,
+            eraser: false,
+            in_range: true,
+            tilt_x: 0,
+            tilt_y: 0,
+        };
+        assert!(stylus_events(p, &cfg)
+            .iter()
+            .any(|e| e.code() == Abs::ABS_PRESSURE.0 && e.value() == HS64_MAX_PRESSURE as i32));
+        p.in_range = false;
+        assert!(stylus_events(p, &cfg)
+            .iter()
+            .filter(|e| e.event_type() == EventType::KEY || e.code() == Abs::ABS_PRESSURE.0)
+            .all(|e| e.value() == 0));
+    }
+}
 
-        self.pen_device.emit(&events)
+#[cfg(test)]
+mod kernel_tests {
+    use super::*;
+    use huion_proto::packet::{parse_report, TabletReport};
+    use std::os::fd::AsRawFd;
+    use std::time::{Duration, Instant};
+
+    fn reader(device: &mut VirtualDevice) -> evdev::Device {
+        let path = device
+            .enumerate_dev_nodes_blocking()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        // udev assigns evdev permissions asynchronously after UI_DEV_CREATE.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut reader = loop {
+            match evdev::Device::open(&path) {
+                Ok(reader) => break reader,
+                Err(e)
+                    if e.kind() == io::ErrorKind::PermissionDenied && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(20))
+                }
+                Err(e) => panic!("Cannot open {}: {e}", path.display()),
+            }
+        };
+        nix::fcntl::fcntl(
+            reader.as_raw_fd(),
+            nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+        )
+        .unwrap();
+        // Keep synthetic regression input away from the desktop.
+        reader.grab().unwrap();
+        reader
+    }
+    fn collect(reader: &mut evdev::Device) -> Vec<InputEvent> {
+        let end = Instant::now() + Duration::from_secs(1);
+        let mut result = Vec::new();
+        while Instant::now() < end {
+            match reader.fetch_events() {
+                Ok(events) => {
+                    result.extend(events);
+                    if result
+                        .iter()
+                        .any(|e| e.event_type() == EventType::SYNCHRONIZATION)
+                    {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(2))
+                }
+                Err(e) => panic!("evdev read failed: {e}"),
+            }
+        }
+        assert!(!result.is_empty(), "No events reached kernel evdev");
+        result
     }
 
-    pub fn emit_express_keys(&mut self, packet: ExpressKeyPacket) -> io::Result<()> {
-        let events = [
-            InputEvent::new(EventType::KEY, Key::BTN_0.code(), if packet.key1 { 1 } else { 0 }),
-            InputEvent::new(EventType::KEY, Key::BTN_1.code(), if packet.key2 { 1 } else { 0 }),
-            InputEvent::new(EventType::KEY, Key::BTN_2.code(), if packet.key3 { 1 } else { 0 }),
-            InputEvent::new(EventType::KEY, Key::BTN_3.code(), if packet.key4 { 1 } else { 0 }),
-            InputEvent::new(EventType::KEY, Key::KEY_LEFTCTRL.code(), if packet.key1 || packet.key2 { 1 } else { 0 }),
-            InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), if packet.key2 { 1 } else { 0 }),
-            InputEvent::new(EventType::KEY, Key::KEY_Z.code(), if packet.key1 || packet.key2 { 1 } else { 0 }),
-            InputEvent::new(EventType::KEY, Key::KEY_B.code(), if packet.key3 { 1 } else { 0 }),
-            InputEvent::new(EventType::KEY, Key::KEY_E.code(), if packet.key4 { 1 } else { 0 }),
-            InputEvent::new(EventType::SYNCHRONIZATION, 0, 0),
-        ];
-
-        self.pad_device.emit(&events)
+    #[test]
+    #[ignore = "requires read/write /dev/uinput and access to resulting evdev nodes"]
+    fn raw_reports_reach_kernel_with_pressure_and_configured_shortcuts() {
+        let cfg = TabletConfig::default();
+        let mut tablet = VirtualTablet::new().unwrap();
+        let mut pen = reader(&mut tablet.pen_device);
+        let mut pad = reader(&mut tablet.pad_device);
+        // Native standard-mode half pressure must become roughly half the
+        // canonical range, never a mouse button or a constant-pressure stroke.
+        let Some(TabletReport::Stylus(p)) =
+            parse_report(&[0x0a, 0xc1, 0x80, 0x3e, 0xd8, 0x27, 0x00, 0x10]).unwrap()
+        else {
+            panic!()
+        };
+        tablet.emit_stylus(p, &cfg).unwrap();
+        let events = collect(&mut pen);
+        assert!(events.iter().any(|e| e.event_type() == EventType::ABSOLUTE
+            && e.code() == Abs::ABS_PRESSURE.0
+            && (4090..=4105).contains(&e.value())));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.event_type() == EventType::SYNCHRONIZATION)
+                .count(),
+            1
+        );
+        let Some(TabletReport::Stylus(p)) = parse_report(&[0x0a, 0x80, 0, 0, 0, 0, 0, 0]).unwrap()
+        else {
+            panic!()
+        };
+        tablet.emit_stylus(p, &cfg).unwrap();
+        let events = collect(&mut pen);
+        assert!(events.iter().any(|e| e.event_type() == EventType::KEY
+            && e.code() == Key::BTN_TOOL_PEN.code()
+            && e.value() == 0));
+        assert!(events.iter().any(|e| e.event_type() == EventType::ABSOLUTE
+            && e.code() == Abs::ABS_PRESSURE.0
+            && e.value() == 0));
+        let Some(TabletReport::ExpressKeys(p)) =
+            parse_report(&[3, 5, 0x1d, 0, 0, 0, 0, 0]).unwrap()
+        else {
+            panic!()
+        };
+        tablet.emit_express_keys(p, &cfg).unwrap();
+        let events = collect(&mut pad);
+        let keys: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type() == EventType::KEY)
+            .map(|e| (e.code(), e.value()))
+            .collect();
+        assert_eq!(keys, vec![(29, 1), (44, 1)]);
+        let Some(TabletReport::ExpressKeys(p)) = parse_report(&[3, 0, 0, 0, 0, 0, 0, 0]).unwrap()
+        else {
+            panic!()
+        };
+        tablet.emit_express_keys(p, &cfg).unwrap();
+        let events = collect(&mut pad);
+        let keys: Vec<_> = events
+            .iter()
+            .filter(|e| e.event_type() == EventType::KEY)
+            .map(|e| (e.code(), e.value()))
+            .collect();
+        assert_eq!(keys, vec![(44, 0), (29, 0)]);
     }
 }

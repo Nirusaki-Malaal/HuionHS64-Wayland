@@ -2,9 +2,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use zbus::interface;
 
-use huion_proto::config::TabletConfig;
-use crate::hidraw::DeviceInfo;
 use crate::display::detect_displays;
+use crate::hidraw::DeviceInfo;
+use huion_proto::config::TabletConfig;
 
 pub struct HuionDbusService {
     config: Arc<RwLock<TabletConfig>>,
@@ -33,10 +33,17 @@ impl HuionDbusService {
     async fn set_config(&self, json_str: String) -> bool {
         match serde_json::from_str::<TabletConfig>(&json_str) {
             Ok(new_cfg) => {
+                if let Err(e) = crate::uinput::validate_config(&new_cfg) {
+                    tracing::warn!("Rejected invalid configuration: {}", e);
+                    return false;
+                }
+                // Serialize disk and memory updates so concurrent clients cannot
+                // leave one configuration saved and another running.
+                let mut cfg = self.config.write().await;
                 if let Err(e) = new_cfg.save() {
                     tracing::error!("Failed to persist config to disk: {}", e);
+                    return false;
                 }
-                let mut cfg = self.config.write().await;
                 *cfg = new_cfg;
                 tracing::info!("Applied updated configuration via D-Bus");
                 true

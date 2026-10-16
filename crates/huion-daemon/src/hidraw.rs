@@ -44,12 +44,15 @@ pub fn find_huion_devices() -> Vec<DeviceInfo> {
                     }
                 }
 
-                if vid == HUION_VENDOR_ID {
+                if vid == HUION_VENDOR_ID && pid == 0x006f {
                     let dev_name = entry.file_name();
                     let dev_path = Path::new("/dev").join(dev_name);
                     tracing::debug!(
                         "Discovered Huion interface at {:?}: VID=0x{:04x}, PID=0x{:04x}, Name={}",
-                        dev_path, vid, pid, name
+                        dev_path,
+                        vid,
+                        pid,
+                        name
                     );
                     devices.push(DeviceInfo {
                         path: dev_path,
@@ -63,6 +66,29 @@ pub fn find_huion_devices() -> Vec<DeviceInfo> {
     }
 
     devices.sort_by(|a, b| a.path.cmp(&b.path));
+    if let Some(first) = devices.first() {
+        let first_name = first.path.file_name().unwrap();
+        let first_sys = fs::canonicalize(
+            Path::new("/sys/class/hidraw")
+                .join(first_name)
+                .join("device"),
+        )
+        .ok();
+        let usb_parent = first_sys
+            .as_ref()
+            .and_then(|p| p.ancestors().find(|p| p.join("idVendor").exists()))
+            .map(Path::to_path_buf);
+        if let Some(parent) = usb_parent {
+            devices.retain(|d| {
+                fs::canonicalize(
+                    Path::new("/sys/class/hidraw")
+                        .join(d.path.file_name().unwrap())
+                        .join("device"),
+                )
+                .is_ok_and(|p| p.starts_with(&parent))
+            });
+        }
+    }
     devices
 }
 
@@ -70,4 +96,55 @@ pub fn find_huion_devices() -> Vec<DeviceInfo> {
 #[allow(dead_code)]
 pub fn find_huion_device() -> Option<DeviceInfo> {
     find_huion_devices().into_iter().next()
+}
+
+/// Grab only the physical USB input nodes belonging to the chosen tablet.
+/// Keeping these handles alive suppresses kernel fallback events; dropping them
+/// restores normal kernel delivery even after a crash or unplug.
+pub fn grab_physical_devices(devices: &[DeviceInfo]) -> std::io::Result<Vec<evdev::Device>> {
+    use std::io;
+    let mut usb_parents = Vec::new();
+    for device in devices {
+        let raw_name = device
+            .path
+            .file_name()
+            .ok_or_else(|| io::Error::other("Invalid hidraw path"))?;
+        let raw_sysfs =
+            fs::canonicalize(Path::new("/sys/class/hidraw").join(raw_name).join("device"))?;
+        let parent = raw_sysfs
+            .ancestors()
+            .find(|p| p.join("idVendor").exists())
+            .ok_or_else(|| io::Error::other("Missing USB parent"))?
+            .to_path_buf();
+        if !usb_parents.contains(&parent) {
+            usb_parents.push(parent);
+        }
+    }
+    let mut grabbed = Vec::new();
+    for entry in fs::read_dir("/sys/class/input")? {
+        let entry = entry?;
+        if !entry.file_name().to_string_lossy().starts_with("event") {
+            continue;
+        }
+        let target = fs::canonicalize(entry.path())?;
+        if !usb_parents.iter().any(|p| target.starts_with(p)) {
+            continue;
+        }
+        let path = Path::new("/dev/input").join(entry.file_name());
+        let mut input = evdev::Device::open(&path)?;
+        input.grab().map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!("Cannot exclusively grab {}: {e}", path.display()),
+            )
+        })?;
+        tracing::info!("Exclusively grabbed physical input {}", path.display());
+        grabbed.push(input);
+    }
+    if grabbed.is_empty() {
+        return Err(io::Error::other(
+            "No physical tablet evdev interfaces found",
+        ));
+    }
+    Ok(grabbed)
 }

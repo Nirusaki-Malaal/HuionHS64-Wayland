@@ -1,15 +1,8 @@
-# Udev rules for Huion HS64 Native Wayland Driver
-# Grants user access to Huion USB devices and uinput
-
-# Allow input group and logged-in user to access Huion USB tablets
-KERNEL=="hidraw*", ATTRS{idVendor}=="256c", MODE="0660", GROUP="input", TAG+="uaccess"
-SUBSYSTEM=="usb", ATTRS{idVendor}=="256c", MODE="0660", GROUP="input", TAG+="uaccess"
-
-# Allow user access to /dev/uinput for virtual tablet creation
+# Access only the supported HS64 physical USB tablet. Physical input suppression
+# is scoped to daemon lifetime through EVIOCGRAB, never permanent libinput ignore.
+KERNEL=="hidraw*", ATTRS{idVendor}=="256c", ATTRS{idProduct}=="006f", MODE="0660", GROUP="input", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="256c", ATTRS{idProduct}=="006f", MODE="0660", GROUP="input", TAG+="uaccess"
 KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input", TAG+="uaccess"
-
-# Tell libinput to ignore the raw physical USB tablet and keyboard interfaces
-# This prevents:
-# 1. Two-pointer conflict (raw kernel mouse5/event23 fighting virtual stylus)
-# 2. Raw factory scancodes leakage (raw kernel event24 fighting custom express key bindings)
-ACTION=="add|change", SUBSYSTEM=="input", ATTRS{idVendor}=="256c", ATTRS{idProduct}=="006f", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+# Clear the old project's persistent suppression when upgrading. Virtual nodes
+# have no USB idVendor/idProduct ancestor, so this cannot match replacement input.
+ACTION=="add|change", SUBSYSTEM=="input", ATTRS{idVendor}=="256c", ATTRS{idProduct}=="006f", ENV{LIBINPUT_IGNORE_DEVICE}=""
