@@ -15,20 +15,33 @@ fn standard_pen(status: u8, x: u16, y: u16, pressure: u16) -> huion_proto::Stylu
 }
 
 #[test]
-fn standard_descriptor_ranges_reach_full_canonical_output() {
-    let pen = standard_pen(0x41, 32000, 20400, 4095);
+fn standard_coordinates_scale_while_pressure_retains_nominal_hardware_range() {
+    let pen = standard_pen(0x41, 32000, 20400, HS64_MAX_PRESSURE);
     assert_eq!(
         (pen.x, pen.y, pen.pressure),
         (HS64_MAX_X, HS64_MAX_Y, HS64_MAX_PRESSURE)
     );
     assert!(pen.in_range && pen.touch);
-    // The prior parser treated native full pressure as half pressure.
-    assert!(standard_pen(0x41, 16000, 10200, 2048).pressure > HS64_MAX_PRESSURE / 2);
+    // Live firmware exceeds the advertised 4095 pressure maximum; preserve
+    // raw values instead of doubling pressure based on that descriptor.
+    assert_eq!(standard_pen(0x41, 16000, 10200, 2048).pressure, 2048);
+    assert_eq!(standard_pen(0x41, 16000, 10200, 5473).pressure, 5473);
     let clamped = standard_pen(0x41, u16::MAX, u16::MAX, u16::MAX);
     assert_eq!(
         (clamped.x, clamped.y, clamped.pressure),
         (HS64_MAX_X, HS64_MAX_Y, HS64_MAX_PRESSURE)
     );
+}
+
+#[test]
+fn captured_standard_report_above_descriptor_pressure_max_is_preserved() {
+    // Actual captured report: 0a c1 75 2b 08 40 19 11 (pressure 4377).
+    let captured = [0x0a, 0xc1, 0x75, 0x2b, 0x08, 0x40, 0x19, 0x11];
+    let Some(TabletReport::Stylus(pen)) = parse_report(&captured).unwrap() else {
+        panic!("expected pen");
+    };
+    assert_eq!(pen.pressure, 4377);
+    assert!(pen.touch && pen.in_range);
 }
 
 #[test]

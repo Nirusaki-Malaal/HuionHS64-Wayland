@@ -80,10 +80,13 @@ pub fn parse_report(data: &[u8]) -> Result<Option<TabletReport>, ProtocolError> 
             let mut pressure = u16::from_le_bytes([data[6], data[7]]);
             if report_id == 0x0a {
                 // Captured /sys/class/hidraw/hidraw8/device/report_descriptor:
-                // X max 0x7d00, Y max 0x4fb0, pressure max 0x0fff.
+                // X max 0x7d00, Y max 0x4fb0. Live captures reach X=32000.
+                // Firmware misleadingly advertises pressure max 0x0fff, but
+                // real 0x0a reports contain pressure >4095 (captured 5473).
+                // Preserve raw pressure in the HS64's nominal 0..8191 range;
+                // scaling from the descriptor would saturate stronger strokes.
                 x = normalize(x, 32000, HS64_MAX_X);
                 y = normalize(y, 20400, HS64_MAX_Y);
-                pressure = normalize(pressure, 4095, HS64_MAX_PRESSURE);
                 touch &= in_range;
             }
             // Avoid stale pressure generating marks on hover or proximity out.
