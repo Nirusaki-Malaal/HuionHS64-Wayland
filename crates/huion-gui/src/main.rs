@@ -116,6 +116,84 @@ fn parse_action(value: &str) -> Result<KeyAction, String> {
     }
 }
 
+const CUSTOM_SHORTCUT: u32 = 8;
+const SHORTCUT_LABELS: &[&str] = &[
+    "Undo · Ctrl+Z",
+    "Redo · Ctrl+Shift+Z",
+    "Brush · B",
+    "Eraser · E",
+    "Pan · Space",
+    "Brush larger · ]",
+    "Brush smaller · [",
+    "Disabled",
+    "Custom…",
+];
+
+fn shortcut_preset(index: u32) -> Option<KeyAction> {
+    match index {
+        0 => Some(KeyAction::KeyCombo(vec![
+            "KEY_LEFTCTRL".into(),
+            "KEY_Z".into(),
+        ])),
+        1 => Some(KeyAction::KeyCombo(vec![
+            "KEY_LEFTCTRL".into(),
+            "KEY_LEFTSHIFT".into(),
+            "KEY_Z".into(),
+        ])),
+        2 => Some(KeyAction::Key("KEY_B".into())),
+        3 => Some(KeyAction::Key("KEY_E".into())),
+        4 => Some(KeyAction::Key("KEY_SPACE".into())),
+        5 => Some(KeyAction::Key("KEY_RIGHTBRACE".into())),
+        6 => Some(KeyAction::Key("KEY_LEFTBRACE".into())),
+        7 => Some(KeyAction::Disabled),
+        _ => None,
+    }
+}
+
+fn shortcut_selection(action: &KeyAction) -> u32 {
+    (0..CUSTOM_SHORTCUT)
+        .find(|index| shortcut_preset(*index).as_ref() == Some(action))
+        .unwrap_or(CUSTOM_SHORTCUT)
+}
+
+fn selected_shortcut(index: u32, custom: &str) -> Result<KeyAction, String> {
+    if index == CUSTOM_SHORTCUT {
+        parse_action(custom)
+    } else {
+        shortcut_preset(index).ok_or_else(|| "Choose a tablet button action.".into())
+    }
+}
+
+struct ShortcutRow {
+    preset: adw::ComboRow,
+    custom: adw::EntryRow,
+}
+
+impl ShortcutRow {
+    fn new(group: &adw::PreferencesGroup, index: usize, action: &KeyAction) -> Self {
+        let selected = shortcut_selection(action);
+        let preset = adw::ComboRow::builder()
+            .title(format!("Button {}", index + 1))
+            .model(&gtk4::StringList::new(SHORTCUT_LABELS))
+            .selected(selected)
+            .build();
+        let custom = adw::EntryRow::builder()
+            .title("Custom · Linux key names")
+            .text(action_text(action))
+            .visible(selected == CUSTOM_SHORTCUT)
+            .build();
+        custom.set_tooltip_text(Some("Use KEY_LEFTCTRL + KEY_Z for a keyboard shortcut, BTN_LEFT / BTN_RIGHT / BTN_MIDDLE for a mouse button, or leave blank to disable."));
+        let custom_visibility = custom.clone();
+        preset.connect_selected_notify(move |row| {
+            custom_visibility.set_visible(row.selected() == CUSTOM_SHORTCUT);
+            custom_visibility.remove_css_class("error");
+        });
+        group.add(&preset);
+        group.add(&custom);
+        Self { preset, custom }
+    }
+}
+
 enum WorkerMessage {
     Status(Result<bool, String>),
     Applied(Result<String, String>),
@@ -326,7 +404,7 @@ fn build_ui(app: &adw::Application) {
     page.append(&status_group);
 
     let mapping = adw::PreferencesGroup::builder()
-        .title("Orientation & display")
+        .title("Orientation and display")
         .description("Rotate the tablet here. Configure monitor mapping and aspect ratio in your desktop’s tablet settings.")
         .build();
     let orientation = adw::ComboRow::builder()
@@ -439,20 +517,16 @@ fn build_ui(app: &adw::Application) {
     test_group.add(&canvas_box);
     page.append(&test_group);
 
-    let keys_group = adw::PreferencesGroup::builder().title("Tablet buttons").description("Linux key names, separated by +. Leave blank to disable. Mouse buttons: BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE, BTN_EXTRA.").build();
+    let keys_group = adw::PreferencesGroup::builder()
+        .title("Tablet buttons")
+        .description("Choose actions for your drawing app. Select Custom for another keyboard or mouse shortcut.")
+        .build();
     let key_rows: Vec<_> = config
         .borrow()
         .express_keys
         .iter()
         .enumerate()
-        .map(|(index, action)| {
-            let row = adw::EntryRow::builder()
-                .title(format!("Button {}", index + 1))
-                .text(action_text(action))
-                .build();
-            keys_group.add(&row);
-            row
-        })
+        .map(|(index, action)| ShortcutRow::new(&keys_group, index, action))
         .collect();
     page.append(&keys_group);
     page.append(
@@ -494,14 +568,14 @@ fn build_ui(app: &adw::Application) {
             _ => PressureCurve::default(),
         };
         for (index, row) in key_rows.iter().enumerate() {
-            match parse_action(&row.text()) {
+            match selected_shortcut(row.preset.selected(), &row.custom.text()) {
                 Ok(action) => {
                     candidate.express_keys[index] = action;
-                    row.remove_css_class("error");
+                    row.custom.remove_css_class("error");
                 }
                 Err(error) => {
-                    row.add_css_class("error");
-                    row.grab_focus();
+                    row.custom.add_css_class("error");
+                    row.custom.grab_focus();
                     overlay_apply.add_toast(adw::Toast::new(&error));
                     return;
                 }
@@ -766,6 +840,34 @@ mod tests {
             parse_action(" key_leftctrl + key_a ").unwrap(),
             KeyAction::KeyCombo(vec!["KEY_LEFTCTRL".into(), "KEY_A".into()])
         );
+    }
+
+    #[test]
+    fn shortcuts_restore_presets_and_preserve_custom_actions() {
+        for index in 0..CUSTOM_SHORTCUT {
+            let action = shortcut_preset(index).unwrap();
+            assert_eq!(shortcut_selection(&action), index);
+            assert_eq!(
+                selected_shortcut(index, "unused custom text").unwrap(),
+                action
+            );
+        }
+        for (index, action) in TabletConfig::default().express_keys.iter().enumerate() {
+            assert_eq!(shortcut_selection(action), index as u32);
+        }
+        for custom in [
+            KeyAction::Key("KEY_F15".into()),
+            KeyAction::KeyCombo(vec!["KEY_LEFTALT".into(), "KEY_A".into()]),
+            KeyAction::MouseButton(272),
+            KeyAction::MouseButton(279),
+        ] {
+            assert_eq!(shortcut_selection(&custom), CUSTOM_SHORTCUT);
+            assert_eq!(
+                selected_shortcut(CUSTOM_SHORTCUT, &action_text(&custom)).unwrap(),
+                custom
+            );
+        }
+        assert!(selected_shortcut(99, "").is_err());
     }
 
     #[test]
