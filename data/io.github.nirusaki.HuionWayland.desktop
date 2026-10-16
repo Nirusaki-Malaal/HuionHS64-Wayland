@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Huion Tablet Settings
+Comment=Configure Huion HS64 graphics tablet on Wayland
+Exec=huion-gui
+Icon=input-tablet
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;Graphics;
+Keywords=huion;tablet;drawing;pen;wayland;stylus;
+StartupNotify=true

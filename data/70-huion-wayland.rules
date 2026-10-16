@@ -1,0 +1,9 @@
+# Udev rules for Huion HS64 Native Wayland Driver
+# Grants user access to Huion USB devices and uinput
+
+# Allow input group and logged-in user to access Huion USB tablets
+KERNEL=="hidraw*", ATTRS{idVendor}=="256c", MODE="0660", GROUP="input", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="256c", MODE="0660", GROUP="input", TAG+="uaccess"
+
+# Allow user access to /dev/uinput for virtual tablet creation
+KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input", TAG+="uaccess"
