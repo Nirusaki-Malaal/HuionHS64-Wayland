@@ -85,10 +85,16 @@ def main():
                 target.unlink(missing_ok=True)
         if not args.destdir:
             subprocess.run(['udevadm', 'control', '--reload'], check=True)
-            # Refresh only HS64 physical nodes, not unrelated input devices.
-            for node in Path('/sys/class/input').glob('event*'):
-                if '256C:006F' in str(node.resolve()):
+            # Apply permissions to devices already plugged in, including uinput
+            # created before the new rules were copied. Avoid unrelated devices.
+            nodes = [*Path('/sys/class/input').glob('event*'),
+                     *Path('/sys/class/hidraw').glob('hidraw*')]
+            for node in nodes:
+                if '256C:006F' in str(node.resolve()).upper():
                     subprocess.run(['udevadm', 'trigger', '--action=change', str(node)], check=True)
+            uinput = Path('/sys/class/misc/uinput')
+            if uinput.exists():
+                subprocess.run(['udevadm', 'trigger', '--action=change', str(uinput)], check=True)
             subprocess.run(['udevadm', 'settle'], check=True)
 
     if manage_service:
