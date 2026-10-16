@@ -1,3 +1,6 @@
+mod preview;
+mod tablet_layout;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::str::FromStr;
@@ -164,6 +167,16 @@ fn selected_shortcut(index: u32, custom: &str) -> Result<KeyAction, String> {
     }
 }
 
+fn shortcut_caption(index: u32) -> String {
+    SHORTCUT_LABELS
+        .get(index as usize)
+        .unwrap_or(&"Custom…")
+        .split(" · ")
+        .next()
+        .unwrap_or("Custom…")
+        .to_string()
+}
+
 struct ShortcutRow {
     preset: adw::ComboRow,
     custom: adw::EntryRow,
@@ -173,7 +186,8 @@ impl ShortcutRow {
     fn new(group: &adw::PreferencesGroup, index: usize, action: &KeyAction) -> Self {
         let selected = shortcut_selection(action);
         let preset = adw::ComboRow::builder()
-            .title(format!("Button {}", index + 1))
+            .title(tablet_layout::BUTTON_POSITIONS[index])
+            .subtitle(format!("Button {}", index + 1))
             .model(&gtk4::StringList::new(SHORTCUT_LABELS))
             .selected(selected)
             .build();
@@ -305,6 +319,32 @@ fn decode_preferences(content: &str) -> Result<(TabletConfig, bool), String> {
     let cleared_mapping = clear_unsupported_mapping(&mut config);
     config.validate()?;
     Ok((config, cleared_mapping))
+}
+
+fn settings_page_box() -> gtk4::Box {
+    gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Vertical)
+        .spacing(24)
+        .margin_top(20)
+        .margin_bottom(24)
+        .margin_start(24)
+        .margin_end(24)
+        .vexpand(true)
+        .build()
+}
+
+fn scrolling_page(child: &impl IsA<gtk4::Widget>) -> gtk4::ScrolledWindow {
+    let clamp = adw::Clamp::builder()
+        .maximum_size(760)
+        .tightening_threshold(520)
+        .vexpand(true)
+        .child(child)
+        .build();
+    gtk4::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .vexpand(true)
+        .child(&clamp)
+        .build()
 }
 
 fn build_ui(app: &adw::Application) {
@@ -502,33 +542,44 @@ fn build_ui(app: &adw::Application) {
     pressure_group.add(&curve);
     page.append(&pressure_group);
 
-    let test_group = adw::PreferencesGroup::builder().title("Try your pen").description("Draw with the stylus to test the pressure delivered by your compositor. Apply changes first.").build();
-    let (canvas, pressure_label, meter, clear) = pressure_canvas();
-    let canvas_box = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
-    canvas_box.set_margin_top(8);
-    canvas_box.append(&canvas);
-    let tools = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
-    pressure_label.set_hexpand(true);
-    pressure_label.set_xalign(0.0);
-    tools.append(&pressure_label);
-    tools.append(&clear);
-    canvas_box.append(&meter);
-    canvas_box.append(&tools);
-    test_group.add(&canvas_box);
-    page.append(&test_group);
+    let test_page = settings_page_box();
+    test_page.set_spacing(12);
+    test_page.append(&preview::pen_test());
+    let buttons_page = settings_page_box();
 
+    let diagram_actions = Rc::new(RefCell::new(std::array::from_fn(|index| {
+        shortcut_caption(shortcut_selection(&config.borrow().express_keys[index]))
+    })));
+    let diagram = tablet_layout::diagram(diagram_actions.clone());
+    let diagram_group = adw::PreferencesGroup::builder()
+        .title("Find your buttons")
+        .description("Cable at top; left and right as pictured. Numbers match the controls below. This reference stays fixed when you rotate your tablet.")
+        .build();
+    diagram_group.add(&diagram);
+    buttons_page.append(&diagram_group);
     let keys_group = adw::PreferencesGroup::builder()
-        .title("Tablet buttons")
-        .description("Choose actions for your drawing app. Select Custom for another keyboard or mouse shortcut.")
+        .title("Assign shortcuts")
+        .description("Choose an action for each button, then press Apply. Shortcuts follow your drawing app’s keyboard settings.")
         .build();
     let key_rows: Vec<_> = config
         .borrow()
         .express_keys
         .iter()
         .enumerate()
-        .map(|(index, action)| ShortcutRow::new(&keys_group, index, action))
+        .map(|(index, action)| {
+            let row = ShortcutRow::new(&keys_group, index, action);
+            let actions = diagram_actions.clone();
+            let diagram = diagram.downgrade();
+            row.preset.connect_selected_notify(move |row| {
+                actions.borrow_mut()[index] = shortcut_caption(row.selected());
+                if let Some(diagram) = diagram.upgrade() {
+                    diagram.queue_draw();
+                }
+            });
+            row
+        })
         .collect();
-    page.append(&keys_group);
+    buttons_page.append(&keys_group);
     page.append(
         &gtk4::Label::builder()
             .label("Settings are stored in your user configuration folder.")
@@ -540,7 +591,26 @@ fn build_ui(app: &adw::Application) {
 
     clamp.set_child(Some(&page));
     scroller.set_child(Some(&clamp));
-    layout.append(&scroller);
+    let stack = adw::ViewStack::new();
+    stack.set_vexpand(true);
+    stack.add_titled_with_icon(&scroller, Some("tablet"), "Tablet", "input-tablet-symbolic");
+    stack.add_titled_with_icon(
+        &scrolling_page(&test_page),
+        Some("pen"),
+        "Try your pen",
+        "document-edit-symbolic",
+    );
+    stack.add_titled_with_icon(
+        &scrolling_page(&buttons_page),
+        Some("buttons"),
+        "Buttons",
+        "input-keyboard-symbolic",
+    );
+    let navigation = adw::ViewSwitcherBar::new();
+    navigation.set_stack(Some(&stack));
+    navigation.set_reveal(true);
+    layout.append(&stack);
+    layout.append(&navigation);
     overlay.set_child(Some(&layout));
     window.set_content(Some(&overlay));
     if let Some(error) = load_error {
@@ -634,174 +704,6 @@ fn build_ui(app: &adw::Application) {
         gtk4::glib::ControlFlow::Continue
     });
     window.present();
-}
-
-#[derive(Clone, Copy)]
-struct Sample {
-    x: f64,
-    y: f64,
-    pressure: f64,
-}
-
-#[derive(Default)]
-struct Canvas {
-    strokes: Vec<Vec<Sample>>,
-    drawing: bool,
-    samples: usize,
-}
-
-fn pressure_canvas() -> (
-    gtk4::DrawingArea,
-    gtk4::Label,
-    gtk4::ProgressBar,
-    gtk4::Button,
-) {
-    let area = gtk4::DrawingArea::builder()
-        .content_height(190)
-        .hexpand(true)
-        .css_classes(["card"])
-        .overflow(gtk4::Overflow::Hidden)
-        .build();
-    area.set_tooltip_text(Some(
-        "Use a tablet stylus. A mouse cannot report pen pressure.",
-    ));
-    let label = gtk4::Label::builder()
-        .label("Waiting for stylus pressure")
-        .css_classes(["dim-label", "caption"])
-        .build();
-    let meter = gtk4::ProgressBar::new();
-    let state = Rc::new(RefCell::new(Canvas::default()));
-    let draw_state = state.clone();
-    area.set_draw_func(move |area, cr, width, height| {
-        let color = area.style_context().color();
-        cr.set_source_rgba(
-            color.red() as f64,
-            color.green() as f64,
-            color.blue() as f64,
-            0.04,
-        );
-        let _ = cr.paint();
-        cr.set_source_rgba(
-            color.red() as f64,
-            color.green() as f64,
-            color.blue() as f64,
-            0.18,
-        );
-        cr.set_line_width(1.0);
-        let mut x = 20;
-        while x < width {
-            let mut y = 20;
-            while y < height {
-                cr.arc(x as f64, y as f64, 0.7, 0.0, std::f64::consts::TAU);
-                let _ = cr.fill();
-                y += 20;
-            }
-            x += 20;
-        }
-        cr.set_source_rgb(0.24, 0.52, 0.92);
-        cr.set_line_cap(gtk4::cairo::LineCap::Round);
-        for stroke in &draw_state.borrow().strokes {
-            if stroke.len() == 1 {
-                let p = stroke[0];
-                cr.arc(p.x, p.y, 0.5 + 7.0 * p.pressure, 0.0, std::f64::consts::TAU);
-                let _ = cr.fill();
-            }
-            for pair in stroke.windows(2) {
-                cr.set_line_width(1.0 + 14.0 * (pair[0].pressure + pair[1].pressure) / 2.0);
-                cr.move_to(pair[0].x, pair[0].y);
-                cr.line_to(pair[1].x, pair[1].y);
-                let _ = cr.stroke();
-            }
-        }
-    });
-    let stylus = gtk4::GestureStylus::new();
-    let down_state = state.clone();
-    let down_area = area.downgrade();
-    let down_label = label.clone();
-    let down_meter = meter.clone();
-    stylus.connect_down(move |gesture, x, y| {
-        let mut state = down_state.borrow_mut();
-        // Bound storage so a long drawing session cannot grow without limit.
-        if state.samples >= 50_000 {
-            state.strokes.clear();
-            state.samples = 0;
-        }
-        state.drawing = true;
-        state.strokes.push(Vec::new());
-        record_sample(gesture, &mut state, x, y, &down_label, &down_meter);
-        if let Some(area) = down_area.upgrade() {
-            area.queue_draw();
-        }
-    });
-    let motion_state = state.clone();
-    let motion_area = area.downgrade();
-    let motion_label = label.clone();
-    let motion_meter = meter.clone();
-    stylus.connect_motion(move |gesture, x, y| {
-        let mut state = motion_state.borrow_mut();
-        if state.drawing && state.samples < 50_000 {
-            record_sample(gesture, &mut state, x, y, &motion_label, &motion_meter);
-            if let Some(area) = motion_area.upgrade() {
-                area.queue_draw();
-            }
-        }
-    });
-    let up_state = state.clone();
-    let up_label = label.clone();
-    let up_meter = meter.clone();
-    stylus.connect_up(move |_, _, _| {
-        up_state.borrow_mut().drawing = false;
-        up_meter.set_fraction(0.0);
-        up_label.set_label("Pen lifted · pressure 0%");
-    });
-    let cancel_state = state.clone();
-    let cancel_label = label.clone();
-    let cancel_meter = meter.clone();
-    stylus.connect_cancel(move |_, _| {
-        cancel_state.borrow_mut().drawing = false;
-        cancel_meter.set_fraction(0.0);
-        cancel_label.set_label("Stroke interrupted · pressure 0%");
-    });
-    area.add_controller(stylus);
-    let clear = gtk4::Button::builder()
-        .label("Clear")
-        .css_classes(["flat"])
-        .build();
-    let clear_area = area.clone();
-    let clear_label = label.clone();
-    let clear_meter = meter.clone();
-    clear.connect_clicked(move |_| {
-        *state.borrow_mut() = Canvas::default();
-        clear_area.queue_draw();
-        clear_meter.set_fraction(0.0);
-        clear_label.set_label("Waiting for stylus pressure");
-    });
-    (area, label, meter, clear)
-}
-
-fn record_sample(
-    gesture: &gtk4::GestureStylus,
-    state: &mut Canvas,
-    x: f64,
-    y: f64,
-    label: &gtk4::Label,
-    meter: &gtk4::ProgressBar,
-) {
-    if let Some(pressure) = gesture
-        .axis(gtk4::gdk::AxisUse::Pressure)
-        .filter(|p| p.is_finite())
-    {
-        let pressure = pressure.clamp(0.0, 1.0);
-        meter.set_fraction(pressure);
-        label.set_label(&format!("Stylus pressure · {:.0}%", pressure * 100.0));
-        if let Some(stroke) = state.strokes.last_mut() {
-            stroke.push(Sample { x, y, pressure });
-            state.samples += 1;
-        }
-    } else {
-        meter.set_fraction(0.0);
-        label.set_label("No pressure axis received from this input device");
-    }
 }
 
 #[cfg(test)]
