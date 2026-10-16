@@ -96,8 +96,13 @@ fn parse_action(value: &str) -> Result<KeyAction, String> {
         return Err("Use Linux key names such as KEY_LEFTCTRL + KEY_Z, a BTN_LEFT mouse button, or leave blank to disable.".into());
     }
     for key in &keys {
-        if evdev::Key::from_str(key).is_err() {
-            return Err(format!("Unknown Linux key name: {key}"));
+        let code = evdev::Key::from_str(key)
+            .map_err(|_| format!("Unknown Linux key name: {key}"))?
+            .code();
+        if code == 0 || code >= 0x300 {
+            return Err(format!(
+                "This key cannot be used as a tablet shortcut: {key}"
+            ));
         }
     }
     let mut distinct = std::collections::HashSet::new();
@@ -207,17 +212,31 @@ async fn apply_config(config: TabletConfig) -> Result<String, String> {
     }
 }
 
+/// Old versions exposed mapping switches without implementing them. Keep the
+/// user's useful pen/button settings and explicitly reset those stale switches.
+fn clear_unsupported_mapping(config: &mut TabletConfig) -> bool {
+    let changed = config.aspect_ratio_locked || config.target_output.is_some();
+    config.aspect_ratio_locked = false;
+    config.target_output = None;
+    changed
+}
+
+fn decode_preferences(content: &str) -> Result<(TabletConfig, bool), String> {
+    let mut config: TabletConfig = toml::from_str(content).map_err(|error| error.to_string())?;
+    // Clear even malformed legacy output names before validating useful fields.
+    let cleared_mapping = clear_unsupported_mapping(&mut config);
+    config.validate()?;
+    Ok((config, cleared_mapping))
+}
+
 fn build_ui(app: &adw::Application) {
     let path = TabletConfig::config_path();
     let (initial, load_error) = match std::fs::read_to_string(&path) {
-        Ok(content) => match toml::from_str::<TabletConfig>(&content) {
-            Ok(config) => match config.validate() {
-                Ok(()) => (config, None),
-                Err(error) => (
-                    TabletConfig::default(),
-                    Some(format!("Saved settings are invalid: {error}")),
-                ),
-            },
+        Ok(content) => match decode_preferences(&content) {
+            Ok((config, cleared_mapping)) => (
+                config,
+                cleared_mapping.then(|| "Saved display overrides are unsupported. Apply to clear them; configure monitor mapping and aspect ratio in your desktop's tablet settings.".into()),
+            ),
             Err(error) => (
                 TabletConfig::default(),
                 Some(format!("Could not read saved settings: {error}")),
@@ -307,8 +326,8 @@ fn build_ui(app: &adw::Application) {
     page.append(&status_group);
 
     let mapping = adw::PreferencesGroup::builder()
-        .title("Tablet orientation")
-        .description("Rotate the tablet to match the way you work.")
+        .title("Orientation & display")
+        .description("Rotate the tablet here. Configure monitor mapping and aspect ratio in your desktop’s tablet settings.")
         .build();
     let orientation = adw::ComboRow::builder()
         .title("Rotation")
@@ -461,6 +480,7 @@ fn build_ui(app: &adw::Application) {
     let config_apply = config.clone();
     apply.connect_clicked(move |button| {
         let mut candidate = config_apply.borrow().clone();
+        clear_unsupported_mapping(&mut candidate);
         candidate.orientation = match orientation.selected() {
             1 => Orientation::Rotate90,
             2 => Orientation::Rotate180,
@@ -505,11 +525,13 @@ fn build_ui(app: &adw::Application) {
         while let Ok(message) = results.try_recv() {
             match message {
                 WorkerMessage::Status(Ok(true)) => {
+                    status.set_tooltip_text(None);
                     status.set_title("Huion HS64 connected");
                     status.set_subtitle("The driver reports an attached tablet");
                     status_icon.set_icon_name(Some("emblem-ok-symbolic"));
                 }
                 WorkerMessage::Status(Ok(false)) => {
+                    status.set_tooltip_text(None);
                     status.set_title("Waiting for your tablet");
                     status.set_subtitle("Driver is running. Connect your Huion HS64 to begin.");
                     status_icon.set_icon_name(Some("input-tablet-symbolic"));
@@ -747,6 +769,29 @@ mod tests {
     }
 
     #[test]
+    fn stale_mapping_options_do_not_prevent_applying_pen_settings() {
+        let mut config = TabletConfig {
+            target_output: Some("DP-1".into()),
+            aspect_ratio_locked: true,
+            pressure_curve: soft_curve(),
+            ..TabletConfig::default()
+        };
+        let keys = config.express_keys.clone();
+        assert!(clear_unsupported_mapping(&mut config));
+        assert_eq!(config.target_output, None);
+        assert!(!config.aspect_ratio_locked);
+        assert_eq!(config.pressure_curve, soft_curve());
+        assert_eq!(config.express_keys, keys);
+        assert!(!clear_unsupported_mapping(&mut config));
+        config.target_output = Some(String::new());
+        let serialized = toml::to_string(&config).unwrap();
+        let (loaded, cleared) = decode_preferences(&serialized).unwrap();
+        assert!(cleared);
+        assert_eq!(loaded.pressure_curve, soft_curve());
+        assert_eq!(loaded.express_keys, keys);
+    }
+
+    #[test]
     fn invalid_shortcuts_fail_instead_of_silently_disabling_buttons() {
         for invalid in [
             "Ctrl + Z",
@@ -756,6 +801,8 @@ mod tests {
             "KEY_A + BTN_LEFT",
             "KEY_THIS_DOES_NOT_EXIST",
             "KEY_Z + KEY_Z",
+            "KEY_RESERVED",
+            "KEY_MAX",
         ] {
             assert!(parse_action(invalid).is_err(), "{invalid}");
         }
