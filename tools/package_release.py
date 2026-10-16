@@ -41,7 +41,7 @@ def main():
             shutil.copy2(source, target)
             subprocess.run(['strip', '--strip-unneeded', str(target)], check=True)
         for relative in ('install.sh', 'uninstall.sh', 'bootstrap.sh', 'scripts/manage_install.py',
-                         'README.md', 'documentation.md', 'RELEASE_NOTES.md', 'LICENSE',
+                         'README.md', 'docs/documentation.md', 'docs/RELEASE_NOTES.md', 'LICENSE',
                          'data/70-huion-wayland.rules', 'data/huion-wayland.service',
                          'data/io.github.nirusaki.HuionWayland.desktop', 'data/kalam-uinput.conf',
                          'docs/benchmarks.json', 'tools/benchmark.py',

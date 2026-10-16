@@ -169,7 +169,7 @@ def main():
             print('Kalam installed. Open settings with: huion-gui')
             if not manage_service:
                 print('As your desktop user: systemctl --user daemon-reload && systemctl --user restart huion-wayland.service')
-            print('If using keyd, exclude -256c:006f in its [ids] section. See documentation.md.')
+            print('If using keyd, exclude -256c:006f in its [ids] section. See docs/documentation.md.')
         else:
             print('Kalam uninstalled. Your personal configuration was preserved.')
 

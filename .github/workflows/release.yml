@@ -40,4 +40,4 @@ jobs:
           sha256sum --check SHA256SUMS
           cd ..
           gh release create "$RELEASE_TAG" dist/*.tar.gz dist/SHA256SUMS \
-            --verify-tag --title "Kalam V${RELEASE_TAG#v}" --notes-file RELEASE_NOTES.md
+            --verify-tag --title "Kalam V${RELEASE_TAG#v}" --notes-file docs/RELEASE_NOTES.md

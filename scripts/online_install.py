@@ -72,7 +72,7 @@ def rust_ready():
 def privileged(command):
     escalation = next((name for name in ('sudo', 'doas') if shutil.which(name)), None)
     if not escalation:
-        raise RuntimeError('Install sudo or doas, or prepare dependencies manually; see documentation.md.')
+        raise RuntimeError('Install sudo or doas, or prepare dependencies manually; see docs/documentation.md.')
     subprocess.run([escalation, *command], check=True)
 
 
@@ -112,11 +112,11 @@ def main():
         print('Rust >= 1.89:', 'available' if rust_ready() else 'will install with rustup as your user')
         print('Then: compile Kalam and install with desktop service management')
         if immutable:
-            print('Immutable/NixOS system: prepare a native build environment first and use --no-deps; see documentation.md')
+            print('Immutable/NixOS system: prepare a native build environment first and use --no-deps; see docs/documentation.md')
         return
     if not args.no_deps:
         if immutable or not manager:
-            raise RuntimeError('Prepare native GTK4/Libadwaita development dependencies first, then use --no-deps. See documentation.md')
+            raise RuntimeError('Prepare native GTK4/Libadwaita development dependencies first, then use --no-deps. See docs/documentation.md')
         if manager == 'apt-get':
             privileged(['apt-get', 'update'])
         privileged(PREFIXES[manager] + PACKAGES[manager])
@@ -132,7 +132,7 @@ def main():
             subprocess.run(['sh', str(script), '-y', '--profile', 'minimal', '--default-toolchain', 'stable'], check=True)
         os.environ['PATH'] = str(Path.home()/'.cargo/bin') + os.pathsep + os.environ['PATH']
     if not rust_ready():
-        raise RuntimeError('Rust installation did not provide a usable compiler; see documentation.md')
+        raise RuntimeError('Rust installation did not provide a usable compiler; see docs/documentation.md')
     if not shutil.which('udevadm'):
         raise RuntimeError('udev/eudev is required. Enable it for your desktop, then retry')
     # Fail before copying system files if the distro's GTK versions are too old.
