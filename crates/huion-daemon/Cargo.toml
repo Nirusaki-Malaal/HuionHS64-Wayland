@@ -1,0 +1,20 @@
+[package]
+name = "huion-daemon"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+huion-proto = { path = "../huion-proto" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+zbus = { workspace = true }
+evdev = { workspace = true }
+nix = { workspace = true }
