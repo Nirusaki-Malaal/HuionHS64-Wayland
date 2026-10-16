@@ -7,7 +7,11 @@ use huion_proto::config::{KeyAction, TabletConfig};
 use huion_proto::packet::{
     ExpressKeyPacket, StylusPacket, HS64_MAX_PRESSURE, HS64_MAX_X, HS64_MAX_Y,
 };
-use std::{collections::BTreeSet, io, str::FromStr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io,
+    str::FromStr,
+};
 
 pub struct VirtualTablet {
     pen_device: VirtualDevice,
@@ -20,6 +24,7 @@ pub struct VirtualTablet {
 #[derive(Default)]
 struct ShortcutState {
     held: Vec<Key>,
+    owners: BTreeMap<u16, BTreeSet<Vec<u16>>>,
 }
 
 fn action_keys(action: &KeyAction) -> Result<Vec<Key>, String> {
@@ -78,40 +83,43 @@ impl ShortcutState {
         config: &TabletConfig,
     ) -> io::Result<Vec<InputEvent>> {
         let mut desired = BTreeSet::new();
+        let mut owners: BTreeMap<u16, BTreeSet<Vec<u16>>> = BTreeMap::new();
         for (pressed, action) in [packet.key1, packet.key2, packet.key3, packet.key4]
             .into_iter()
             .zip(&config.express_keys)
         {
             if pressed {
-                for key in action_keys(action)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
-                {
+                let keys = action_keys(action)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+                let mut chord: Vec<_> = keys.iter().map(|key| key.code()).collect();
+                chord.sort_unstable();
+                for key in keys {
                     desired.insert(key.code());
+                    if !modifier(key) {
+                        owners.entry(key.code()).or_default().insert(chord.clone());
+                    }
                 }
             }
         }
         let mut next: Vec<Key> = desired.into_iter().map(Key::new).collect();
         next.sort_by_key(|k| (!modifier(*k), k.code()));
         let mut events = Vec::new();
-        // Changing modifiers while a shared key stays held needs a fresh key-down
-        // (e.g. Undo -> Redo: Z up, Shift down, Z down).
-        let modifiers_changed = self
-            .held
-            .iter()
-            .filter(|k| modifier(**k))
-            .collect::<Vec<_>>()
-            != next.iter().filter(|k| modifier(**k)).collect::<Vec<_>>();
+        // Retrigger a shared key only when its owning chord changes (Undo ->
+        // Redo). Unrelated held keys/mouse drags must survive other modifiers.
+        let retrigger =
+            |key: &Key| !modifier(*key) && self.owners.get(&key.code()) != owners.get(&key.code());
         for key in self.held.iter().rev() {
-            if !next.contains(key) || (modifiers_changed && !modifier(*key)) {
+            if !next.contains(key) || retrigger(key) {
                 events.push(InputEvent::new(EventType::KEY, key.code(), 0));
             }
         }
         for key in &next {
-            if !self.held.contains(key) || (modifiers_changed && !modifier(*key)) {
+            if !self.held.contains(key) || retrigger(key) {
                 events.push(InputEvent::new(EventType::KEY, key.code(), 1));
             }
         }
         self.held = next;
+        self.owners = owners;
         Ok(events)
     }
 }
@@ -268,6 +276,28 @@ mod tests {
         cfg.express_keys[0] = KeyAction::Key("KEY_DOES_NOT_EXIST".into());
         assert!(validate_config(&cfg).is_err());
     }
+    #[test]
+    fn unrelated_shortcuts_do_not_split_mouse_drags_or_repress_pan() {
+        for action in [
+            KeyAction::MouseButton(272),
+            KeyAction::Key("KEY_SPACE".into()),
+        ] {
+            let mut cfg = TabletConfig::default();
+            cfg.express_keys[0] = action;
+            cfg.express_keys[1] = KeyAction::KeyCombo(vec!["KEY_LEFTCTRL".into(), "KEY_Z".into()]);
+            let mut state = ShortcutState::default();
+            state.update(packet(1), &cfg).unwrap();
+            assert_eq!(
+                tuples(state.update(packet(3), &cfg).unwrap()),
+                vec![(29, 1), (44, 1)]
+            );
+            assert_eq!(
+                tuples(state.update(packet(1), &cfg).unwrap()),
+                vec![(44, 0), (29, 0)]
+            );
+        }
+    }
+
     #[test]
     fn hover_and_proximity_out_clear_pressure_and_buttons() {
         let cfg = TabletConfig::default();

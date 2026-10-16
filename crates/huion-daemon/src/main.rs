@@ -34,6 +34,7 @@ struct Session {
     tablet: VirtualTablet,
     _grabs: Vec<evdev::Device>,
     paths: Vec<PathBuf>,
+    physical_paths: Vec<PathBuf>,
     generation: u64,
 }
 impl Drop for Session {
@@ -84,7 +85,8 @@ impl Session {
                 unsafe { AsyncFd::register(file) }.map_err(io::Error::from)
             })
             .collect::<io::Result<_>>()?;
-        let grabs = hidraw::grab_physical_devices(devices)?;
+        let physical_paths = hidraw::physical_input_paths(devices)?;
+        let grabs = hidraw::grab_physical_devices(&physical_paths)?;
         let mut readers = Vec::new();
         for file in files {
             let sender = tx.clone();
@@ -122,6 +124,7 @@ impl Session {
             tablet,
             _grabs: grabs,
             paths: devices.iter().map(|d| d.path.clone()).collect(),
+            physical_paths,
             generation,
         })
     }
@@ -164,7 +167,8 @@ async fn main() -> anyhow::Result<()> {
             _ = monitor.tick() => {
                 let devices = find_huion_devices();
                 let paths: Vec<_> = devices.iter().map(|d| d.path.clone()).collect();
-                if session.as_ref().is_some_and(|s| s.paths != paths) {
+                if session.as_ref().is_some_and(|s| s.paths != paths ||
+                    hidraw::physical_input_paths(&devices).map_or(true, |physical| physical != s.physical_paths)) {
                     session = None;
                     *device_info.write().await = None;
                 }
