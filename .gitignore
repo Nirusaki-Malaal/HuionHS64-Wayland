@@ -24,3 +24,10 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Local planning and reverse engineering notes
+/plan.md
+/research.md
+/research/
+/BUILD_CONTEXT.md
+/build_context.md

@@ -28,8 +28,8 @@ This implementation targets the observed HS64 standard mode (`0x0a` pen,
 `0x03` keyboard). Vendor `0x08` reports are preserved but not interpreted or
 used to switch firmware modes. Other Huion models are not supported. Display
 selection and aspect-ratio mapping belong to the compositor; tilt is not
-advertised by this HS64. See [research.md](research.md) for the evidence and
-[documentation.md](documentation.md) for implementation details and limitations.
+advertised by this HS64. See [documentation.md](documentation.md) for
+implementation details and limitations.
 
 ## Easy installation
 
@@ -167,8 +167,8 @@ python tests/lifecycle_e2e.py
 
 Kernel tests grab their temporary devices before sending test events. They fail
 if a remapper owns those devices. Hardware interaction and application pressure
-response are separate from synthetic kernel tests. Validation results and
-remaining checks are recorded in [research/validation.md](research/validation.md).
+response are separate from synthetic kernel tests. The CI workflow checks code
+and packaging; hardware behavior requires the local live-session checks above.
 
 ## CI/CD and release builds
 
@@ -204,7 +204,6 @@ come from the Ubuntu CI runner.
 | `crates/huion-proto` | Report parsing, curves, rotation, validated atomic settings |
 | `crates/huion-daemon` | HID streams, exclusive ownership, virtual input, D-Bus |
 | `crates/huion-gui` | GTK/Adwaita settings and real pressure test |
-| `research/vendor-analysis.md` | Ghidra/objdump findings, hashes and addresses |
 | `tests` | Live D-Bus and service lifecycle checks |
 | `tools/capture_tablet.py` | Bounded capture of HS64 interfaces only |
 

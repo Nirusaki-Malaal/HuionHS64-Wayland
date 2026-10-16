@@ -35,9 +35,8 @@ ultimately resolved by exclusive evdev grabs. Run as the desktop user, not root.
 
 ## Standard-mode reports
 
-The live descriptor and fresh binary analysis are separate evidence sources.
-See [vendor-analysis.md](research/vendor-analysis.md) and
-[hardware-evidence.json](research/hardware-evidence.json).
+The protocol details below were checked against connected-device HID
+descriptors, captured reports and focused analysis of the vendor binaries.
 
 ### Pen: report 0x0a
 
@@ -174,8 +173,7 @@ backup until hardware verification is satisfactory.
 
 ## Validation boundaries
 
-See [validation.md](research/validation.md) for executed checks. Parser unit
-checks, synthetic kernel injection, live D-Bus/lifecycle checks and actual
+Parser unit checks, synthetic kernel injection, live D-Bus/lifecycle checks and actual
 drawing-app interaction are different levels of evidence. Passing one does not
 establish all the others. No full-driver reconstruction, vendor-mode parity,
 monitor mapping, tilt, or universal compositor compatibility is claimed.
