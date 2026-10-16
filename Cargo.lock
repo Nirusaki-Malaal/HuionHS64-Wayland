@@ -763,6 +763,7 @@ dependencies = [
 name = "huion-gui"
 version = "0.1.0"
 dependencies = [
+ "evdev",
  "gtk4",
  "huion-proto",
  "libadwaita",

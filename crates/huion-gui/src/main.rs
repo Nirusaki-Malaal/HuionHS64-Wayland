@@ -1,69 +1,323 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::str::FromStr;
+use std::sync::mpsc;
+use std::time::Duration;
+
 use gtk4::prelude::*;
 use libadwaita as adw;
 use libadwaita::prelude::*;
-use adw::{ActionRow, Application, ApplicationWindow, ComboRow, HeaderBar, PreferencesGroup, PreferencesPage};
-use gtk4::{Button, DrawingArea, Orientation as GtkOrientation, StringList};
 
 use huion_proto::bezier::PressureCurve;
-use huion_proto::config::{Orientation, TabletConfig};
+use huion_proto::config::{KeyAction, Orientation, TabletConfig};
 
 const APP_ID: &str = "io.github.nirusaki.HuionWayland";
+const BUS_NAME: &str = "org.wayland.HuionTablet";
+const BUS_PATH: &str = "/org/wayland/HuionTablet";
 
 fn main() {
-    let app = Application::builder().application_id(APP_ID).build();
-    app.connect_activate(build_ui);
+    let app = adw::Application::builder().application_id(APP_ID).build();
+    app.connect_activate(|app| {
+        if let Some(window) = app.active_window() {
+            window.present();
+        } else {
+            build_ui(app);
+        }
+    });
     app.run();
 }
 
-fn build_ui(app: &Application) {
-    let config = Rc::new(RefCell::new(TabletConfig::load_or_default()));
+fn soft_curve() -> PressureCurve {
+    PressureCurve::new(0.2, 0.5, 0.5, 0.9)
+}
 
-    let window = ApplicationWindow::builder()
+fn firm_curve() -> PressureCurve {
+    PressureCurve::new(0.5, 0.1, 0.8, 0.5)
+}
+
+fn curve_selection(curve: PressureCurve) -> u32 {
+    if curve == PressureCurve::default() {
+        0
+    } else if curve == soft_curve() {
+        1
+    } else if curve == firm_curve() {
+        2
+    } else {
+        3
+    }
+}
+
+fn action_text(action: &KeyAction) -> String {
+    match action {
+        KeyAction::Disabled => String::new(),
+        KeyAction::Key(key) => key.clone(),
+        KeyAction::KeyCombo(keys) => keys.join(" + "),
+        KeyAction::MouseButton(code) => match *code {
+            272 => "BTN_LEFT".into(),
+            273 => "BTN_RIGHT".into(),
+            274 => "BTN_MIDDLE".into(),
+            275 => "BTN_SIDE".into(),
+            276 => "BTN_EXTRA".into(),
+            277 => "BTN_FORWARD".into(),
+            278 => "BTN_BACK".into(),
+            279 => "BTN_TASK".into(),
+            _ => format!("BTN_CODE_{code}"),
+        },
+    }
+}
+
+fn parse_action(value: &str) -> Result<KeyAction, String> {
+    let value = value.trim().to_ascii_uppercase();
+    if value.is_empty() {
+        return Ok(KeyAction::Disabled);
+    }
+    let button = match value.as_str() {
+        "BTN_LEFT" => Some(272),
+        "BTN_RIGHT" => Some(273),
+        "BTN_MIDDLE" => Some(274),
+        "BTN_SIDE" => Some(275),
+        "BTN_EXTRA" => Some(276),
+        "BTN_FORWARD" => Some(277),
+        "BTN_BACK" => Some(278),
+        "BTN_TASK" => Some(279),
+        _ => None,
+    };
+    if let Some(code) = button {
+        return Ok(KeyAction::MouseButton(code));
+    }
+    let keys: Vec<String> = value.split('+').map(|key| key.trim().to_owned()).collect();
+    if keys.iter().any(|key| {
+        !key.starts_with("KEY_")
+            || key.len() <= 4
+            || !key
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    }) {
+        return Err("Use Linux key names such as KEY_LEFTCTRL + KEY_Z, a BTN_LEFT mouse button, or leave blank to disable.".into());
+    }
+    for key in &keys {
+        if evdev::Key::from_str(key).is_err() {
+            return Err(format!("Unknown Linux key name: {key}"));
+        }
+    }
+    let mut distinct = std::collections::HashSet::new();
+    if keys.iter().any(|key| !distinct.insert(key)) {
+        return Err("A shortcut cannot contain the same key twice.".into());
+    }
+    if keys.len() == 1 {
+        Ok(KeyAction::Key(keys[0].clone()))
+    } else {
+        Ok(KeyAction::KeyCombo(keys))
+    }
+}
+
+enum WorkerMessage {
+    Status(Result<bool, String>),
+    Applied(Result<String, String>),
+}
+
+/// D-Bus and disk operations stay off the GTK main thread.
+fn start_worker() -> (mpsc::Sender<TabletConfig>, mpsc::Receiver<WorkerMessage>) {
+    let (requests, incoming) = mpsc::channel::<TabletConfig>();
+    let (outgoing, results) = mpsc::channel();
+    std::thread::spawn(move || {
+        let runtime = match tokio::runtime::Runtime::new() {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let _ = outgoing.send(WorkerMessage::Status(Err(error.to_string())));
+                return;
+            }
+        };
+        loop {
+            let status = runtime.block_on(async {
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    let connection = zbus::Connection::session()
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let reply = connection
+                        .call_method(
+                            Some(BUS_NAME),
+                            BUS_PATH,
+                            Some(BUS_NAME),
+                            "GetDeviceInfo",
+                            &(),
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let json: String = reply.body().deserialize().map_err(|e| e.to_string())?;
+                    let info: serde_json::Value =
+                        serde_json::from_str(&json).map_err(|e| e.to_string())?;
+                    Ok(info["connected"].as_bool().unwrap_or(false))
+                })
+                .await
+                .map_err(|_| "Driver did not respond".to_string())?
+            });
+            if outgoing.send(WorkerMessage::Status(status)).is_err() {
+                break;
+            }
+            match incoming.recv_timeout(Duration::from_secs(3)) {
+                Ok(config) => {
+                    let result = runtime.block_on(apply_config(config));
+                    if outgoing.send(WorkerMessage::Applied(result)).is_err() {
+                        break;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+    });
+    (requests, results)
+}
+
+async fn apply_config(config: TabletConfig) -> Result<String, String> {
+    config.validate()?;
+    let json = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+    let live = tokio::time::timeout(Duration::from_secs(3), async {
+        let connection = zbus::Connection::session()
+            .await
+            .map_err(|e| e.to_string())?;
+        let reply = connection
+            .call_method(
+                Some(BUS_NAME),
+                BUS_PATH,
+                Some(BUS_NAME),
+                "SetConfig",
+                &(json,),
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        reply
+            .body()
+            .deserialize::<bool>()
+            .map_err(|e| e.to_string())
+    })
+    .await;
+    match live {
+        Ok(Ok(true)) => Ok("Settings applied to the driver".into()),
+        Ok(Ok(false)) => {
+            Err("The driver rejected these settings. Check key names and the driver log.".into())
+        }
+        _ => {
+            config
+                .save()
+                .map_err(|e| format!("Could not save settings: {e}"))?;
+            Ok("Settings saved locally. Start or restart the driver to apply them.".into())
+        }
+    }
+}
+
+fn build_ui(app: &adw::Application) {
+    let path = TabletConfig::config_path();
+    let (initial, load_error) = match std::fs::read_to_string(&path) {
+        Ok(content) => match toml::from_str::<TabletConfig>(&content) {
+            Ok(config) => match config.validate() {
+                Ok(()) => (config, None),
+                Err(error) => (
+                    TabletConfig::default(),
+                    Some(format!("Saved settings are invalid: {error}")),
+                ),
+            },
+            Err(error) => (
+                TabletConfig::default(),
+                Some(format!("Could not read saved settings: {error}")),
+            ),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (TabletConfig::default(), None)
+        }
+        Err(error) => (
+            TabletConfig::default(),
+            Some(format!("Could not open settings: {error}")),
+        ),
+    };
+    let config = Rc::new(RefCell::new(initial));
+    let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("Huion HS64 Settings (Native Wayland)")
-        .default_width(720)
-        .default_height(680)
+        .title("Huion Tablet")
+        .default_width(760)
+        .default_height(860)
         .build();
-
-    let header_bar = HeaderBar::new();
-    let apply_btn = Button::builder()
-        .label("Apply Settings")
+    let overlay = adw::ToastOverlay::new();
+    let layout = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+    let header = adw::HeaderBar::new();
+    header.set_title_widget(Some(&adw::WindowTitle::new(
+        "Huion Tablet",
+        "HS64 · Pen & tablet settings",
+    )));
+    let apply = gtk4::Button::builder()
+        .label("Apply")
         .css_classes(["suggested-action"])
+        .valign(gtk4::Align::Center)
         .build();
-    header_bar.pack_end(&apply_btn);
+    apply.set_tooltip_text(Some("Save settings and send them to the running driver"));
+    header.pack_end(&apply);
+    layout.append(&header);
 
-    let page = PreferencesPage::new();
-
-    // Group 1: Device Information
-    let dev_group = PreferencesGroup::builder()
-        .title("Device Status")
-        .description("Hardware connection and identity under Wayland")
+    let scroller = gtk4::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .vexpand(true)
+        .build();
+    let clamp = adw::Clamp::builder()
+        .maximum_size(760)
+        .tightening_threshold(520)
+        .build();
+    let page = gtk4::Box::builder()
+        .orientation(gtk4::Orientation::Vertical)
+        .spacing(24)
+        .margin_top(24)
+        .margin_bottom(32)
+        .margin_start(24)
+        .margin_end(24)
         .build();
 
-    let dev_row = ActionRow::builder()
-        .title("Huion HS64")
-        .subtitle("Vendor ID: 0x256c | Direct Kernel Uinput Active")
-        .build();
-    dev_group.add(&dev_row);
-    page.add(&dev_group);
+    let hero = gtk4::Box::new(gtk4::Orientation::Horizontal, 16);
+    let icon = gtk4::Image::from_icon_name("input-tablet-symbolic");
+    icon.set_pixel_size(48);
+    icon.add_css_class("accent");
+    hero.append(&icon);
+    let title_box = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+    title_box.append(
+        &gtk4::Label::builder()
+            .label("Make every stroke yours")
+            .xalign(0.0)
+            .wrap(true)
+            .css_classes(["title-1"])
+            .build(),
+    );
+    title_box.append(
+        &gtk4::Label::builder()
+            .label("Tune your pen, tablet orientation and shortcuts.")
+            .xalign(0.0)
+            .wrap(true)
+            .css_classes(["dim-label"])
+            .build(),
+    );
+    hero.append(&title_box);
+    page.append(&hero);
 
-    // Group 2: Orientation & Mapping
-    let map_group = PreferencesGroup::builder()
-        .title("Display and Orientation")
-        .description("Coordinate mapping and left-handed mode")
+    let status_group = adw::PreferencesGroup::new();
+    let status = adw::ActionRow::builder()
+        .title("Checking driver…")
+        .subtitle("Looking for the tablet service on your session bus")
         .build();
+    let status_icon = gtk4::Image::from_icon_name("network-offline-symbolic");
+    status.add_prefix(&status_icon);
+    status_group.add(&status);
+    page.append(&status_group);
 
-    let orient_strings = StringList::new(&[
-        "Normal (0°)",
-        "Rotate 90° (Portrait)",
-        "Rotate 180° (Left-Handed Mode)",
-        "Rotate 270° (Inverted Portrait)",
-    ]);
-    let orient_row = ComboRow::builder()
-        .title("Tablet Orientation")
-        .model(&orient_strings)
+    let mapping = adw::PreferencesGroup::builder()
+        .title("Tablet orientation")
+        .description("Rotate the tablet to match the way you work.")
+        .build();
+    let orientation = adw::ComboRow::builder()
+        .title("Rotation")
+        .model(&gtk4::StringList::new(&[
+            "0° · Standard",
+            "90° · Clockwise",
+            "180° · Left handed",
+            "270° · Counterclockwise",
+        ]))
         .selected(match config.borrow().orientation {
             Orientation::Normal => 0,
             Orientation::Rotate90 => 1,
@@ -71,159 +325,439 @@ fn build_ui(app: &Application) {
             Orientation::Rotate270 => 3,
         })
         .build();
-    map_group.add(&orient_row);
-    page.add(&map_group);
+    mapping.add(&orientation);
+    page.append(&mapping);
 
-    // Group 3: Pressure Curve & Calibration
-    let pressure_group = PreferencesGroup::builder()
-        .title("Stylus Pressure Curve")
-        .description("PW100 8192-level cubic Bezier calibration")
+    let pressure_group = adw::PreferencesGroup::builder()
+        .title("Pen pressure")
+        .description("Choose how quickly your stroke reaches full pressure.")
         .build();
-
-    let pressure_presets = StringList::new(&["Linear (Default)", "Soft (Light Touch)", "Hard (Firm Stroke)"]);
-    let preset_row = ComboRow::builder()
-        .title("Pressure Curve Profile")
-        .model(&pressure_presets)
-        .selected(0)
+    let preset = adw::ComboRow::builder()
+        .title("Response")
+        .model(&gtk4::StringList::new(&[
+            "Linear · Natural response",
+            "Soft · Less force",
+            "Firm · More control",
+            "Custom · Keep saved curve",
+        ]))
+        .selected(curve_selection(config.borrow().pressure_curve))
         .build();
-    pressure_group.add(&preset_row);
-
-    // Live test scratchpad
-    let drawing_area = DrawingArea::builder()
-        .content_width(600)
-        .content_height(140)
-        .css_classes(["card"])
+    pressure_group.add(&preset);
+    let curve = gtk4::DrawingArea::builder()
+        .content_height(100)
+        .margin_top(12)
         .build();
-
-    let points: Rc<RefCell<Vec<(f64, f64)>>> = Rc::new(RefCell::new(Vec::new()));
-    let points_clone = points.clone();
-
-    drawing_area.set_draw_func(move |_, cr, _width, height| {
-        cr.set_source_rgb(0.95, 0.95, 0.97);
-        let _ = cr.paint();
-
-        cr.set_source_rgb(0.2, 0.5, 0.9);
-        cr.set_line_width(4.0);
-
-        let pts = points_clone.borrow();
-        if pts.len() >= 2 {
-            cr.move_to(pts[0].0, pts[0].1);
-            for pt in pts.iter().skip(1) {
-                cr.line_to(pt.0, pt.1);
+    let preset_curve = preset.clone();
+    let custom_curve = config.borrow().pressure_curve;
+    curve.set_draw_func(move |area, cr, width, height| {
+        let color = area.style_context().color();
+        cr.set_source_rgba(
+            color.red() as f64,
+            color.green() as f64,
+            color.blue() as f64,
+            0.18,
+        );
+        cr.set_line_width(1.0);
+        let (left, top, w, h) = (
+            16.0,
+            8.0,
+            (width - 32).max(1) as f64,
+            (height - 24).max(1) as f64,
+        );
+        for i in 0..=4 {
+            let t = i as f64 / 4.0;
+            cr.move_to(left + t * w, top);
+            cr.line_to(left + t * w, top + h);
+            cr.move_to(left, top + t * h);
+            cr.line_to(left + w, top + t * h);
+        }
+        let _ = cr.stroke();
+        let curve = match preset_curve.selected() {
+            1 => soft_curve(),
+            2 => firm_curve(),
+            3 => custom_curve,
+            _ => PressureCurve::default(),
+        };
+        cr.set_source_rgba(
+            color.red() as f64,
+            color.green() as f64,
+            color.blue() as f64,
+            0.9,
+        );
+        cr.set_line_width(2.5);
+        for i in 0..=100 {
+            let x = i as f64 / 100.0;
+            let y = curve.evaluate(x);
+            if i == 0 {
+                cr.move_to(left, top + h);
+            } else {
+                cr.line_to(left + x * w, top + (1.0 - y) * h);
             }
-            let _ = cr.stroke();
         }
-
-        // Draw hint text
-        cr.set_source_rgb(0.5, 0.5, 0.5);
-        cr.move_to(20.0, height as f64 - 20.0);
-        let _ = cr.show_text("Pressure Test Area: draw here to test stroke response");
+        let _ = cr.stroke();
     });
-
-    let drag = gtk4::GestureDrag::new();
-    let pts_drag = points.clone();
-    let da_clone = drawing_area.clone();
-    drag.connect_drag_update(move |gesture, offset_x, offset_y| {
-        if let Some((start_x, start_y)) = gesture.start_point() {
-            pts_drag.borrow_mut().push((start_x + offset_x, start_y + offset_y));
-            da_clone.queue_draw();
+    let curve_redraw = curve.downgrade();
+    preset.connect_selected_notify(move |_| {
+        if let Some(curve) = curve_redraw.upgrade() {
+            curve.queue_draw();
         }
     });
-    drawing_area.add_controller(drag);
+    pressure_group.add(&curve);
+    page.append(&pressure_group);
 
-    let clear_btn = Button::builder().label("Clear Test Canvas").build();
-    let pts_clear = points.clone();
-    let da_clear = drawing_area.clone();
-    clear_btn.connect_clicked(move |_| {
-        pts_clear.borrow_mut().clear();
-        da_clear.queue_draw();
-    });
+    let test_group = adw::PreferencesGroup::builder().title("Try your pen").description("Draw with the stylus to test the pressure delivered by your compositor. Apply changes first.").build();
+    let (canvas, pressure_label, meter, clear) = pressure_canvas();
+    let canvas_box = gtk4::Box::new(gtk4::Orientation::Vertical, 10);
+    canvas_box.set_margin_top(8);
+    canvas_box.append(&canvas);
+    let tools = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+    pressure_label.set_hexpand(true);
+    pressure_label.set_xalign(0.0);
+    tools.append(&pressure_label);
+    tools.append(&clear);
+    canvas_box.append(&meter);
+    canvas_box.append(&tools);
+    test_group.add(&canvas_box);
+    page.append(&test_group);
 
-    let canvas_box = gtk4::Box::builder()
-        .orientation(GtkOrientation::Vertical)
-        .spacing(8)
-        .margin_top(8)
-        .margin_bottom(8)
-        .build();
-    canvas_box.append(&drawing_area);
-    canvas_box.append(&clear_btn);
+    let keys_group = adw::PreferencesGroup::builder().title("Tablet buttons").description("Linux key names, separated by +. Leave blank to disable. Mouse buttons: BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE, BTN_EXTRA.").build();
+    let key_rows: Vec<_> = config
+        .borrow()
+        .express_keys
+        .iter()
+        .enumerate()
+        .map(|(index, action)| {
+            let row = adw::EntryRow::builder()
+                .title(format!("Button {}", index + 1))
+                .text(action_text(action))
+                .build();
+            keys_group.add(&row);
+            row
+        })
+        .collect();
+    page.append(&keys_group);
+    page.append(
+        &gtk4::Label::builder()
+            .label("Settings are stored in your user configuration folder.")
+            .wrap(true)
+            .xalign(0.0)
+            .css_classes(["dim-label", "caption"])
+            .build(),
+    );
 
-    pressure_group.add(&canvas_box);
-    page.add(&pressure_group);
+    clamp.set_child(Some(&page));
+    scroller.set_child(Some(&clamp));
+    layout.append(&scroller);
+    overlay.set_child(Some(&layout));
+    window.set_content(Some(&overlay));
+    if let Some(error) = load_error {
+        let toast = adw::Toast::new(&error);
+        toast.set_timeout(0);
+        overlay.add_toast(toast);
+    }
 
-    // Group 4: Express Keys
-    let keys_group = PreferencesGroup::builder()
-        .title("Express Keys (4 Physical Buttons)")
-        .description("Hardware button action bindings")
-        .build();
-
-    let key1_row = ActionRow::builder().title("Button 1 (Top)").subtitle("Undo (Ctrl + Z)").build();
-    let key2_row = ActionRow::builder().title("Button 2").subtitle("Redo (Ctrl + Shift + Z)").build();
-    let key3_row = ActionRow::builder().title("Button 3").subtitle("Brush Tool (B)").build();
-    let key4_row = ActionRow::builder().title("Button 4 (Bottom)").subtitle("Eraser Tool (E)").build();
-
-    keys_group.add(&key1_row);
-    keys_group.add(&key2_row);
-    keys_group.add(&key3_row);
-    keys_group.add(&key4_row);
-    page.add(&keys_group);
-
-    // Connect Apply Button
+    let (requests, results) = start_worker();
+    let overlay_apply = overlay.clone();
     let config_apply = config.clone();
-    let orient_row_clone = orient_row.clone();
-    let preset_row_clone = preset_row.clone();
-
-    apply_btn.connect_clicked(move |_| {
-        let mut cfg = config_apply.borrow_mut();
-        cfg.orientation = match orient_row_clone.selected() {
-            0 => Orientation::Normal,
+    apply.connect_clicked(move |button| {
+        let mut candidate = config_apply.borrow().clone();
+        candidate.orientation = match orientation.selected() {
             1 => Orientation::Rotate90,
             2 => Orientation::Rotate180,
             3 => Orientation::Rotate270,
             _ => Orientation::Normal,
         };
-
-        cfg.pressure_curve = match preset_row_clone.selected() {
-            1 => PressureCurve::new(0.5, 0.1, 0.8, 0.5), // Soft
-            2 => PressureCurve::new(0.2, 0.5, 0.5, 0.9), // Hard
-            _ => PressureCurve::default(),               // Linear
+        candidate.pressure_curve = match preset.selected() {
+            1 => soft_curve(),
+            2 => firm_curve(),
+            3 => custom_curve,
+            _ => PressureCurve::default(),
         };
-
-        if let Err(e) = cfg.save() {
-            eprintln!("Failed to save config: {}", e);
-        } else {
-            println!("Saved tablet settings successfully!");
-        }
-
-        // Notify daemon asynchronously via D-Bus
-        let cfg_json = serde_json::to_string(&*cfg).unwrap_or_default();
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                if let Ok(connection) = zbus::Connection::session().await {
-                    let _ = connection
-                        .call_method(
-                            Some("org.wayland.HuionTablet"),
-                            "/org/wayland/HuionTablet",
-                            Some("org.wayland.HuionTablet"),
-                            "SetConfig",
-                            &(cfg_json,),
-                        )
-                        .await;
+        for (index, row) in key_rows.iter().enumerate() {
+            match parse_action(&row.text()) {
+                Ok(action) => {
+                    candidate.express_keys[index] = action;
+                    row.remove_css_class("error");
                 }
-            });
-        });
-
-        let toast = adw::Toast::new("Tablet configuration applied!");
-        toast.set_timeout(2);
-        // Display toast if overlay available
-        println!("Configuration applied to active driver.");
+                Err(error) => {
+                    row.add_css_class("error");
+                    row.grab_focus();
+                    overlay_apply.add_toast(adw::Toast::new(&error));
+                    return;
+                }
+            }
+        }
+        if requests.send(candidate.clone()).is_ok() {
+            *config_apply.borrow_mut() = candidate;
+            button.set_sensitive(false);
+            button.set_label("Applying…");
+        } else {
+            overlay_apply.add_toast(adw::Toast::new(
+                "The settings worker stopped. Close and reopen this window.",
+            ));
+        }
     });
-
-    let main_box = gtk4::Box::builder().orientation(GtkOrientation::Vertical).build();
-    main_box.append(&header_bar);
-    main_box.append(&page);
-
-    window.set_content(Some(&main_box));
+    let window_weak = window.downgrade();
+    gtk4::glib::timeout_add_local(Duration::from_millis(100), move || {
+        if window_weak.upgrade().is_none() {
+            return gtk4::glib::ControlFlow::Break;
+        }
+        while let Ok(message) = results.try_recv() {
+            match message {
+                WorkerMessage::Status(Ok(true)) => {
+                    status.set_title("Huion HS64 connected");
+                    status.set_subtitle("The driver reports an attached tablet");
+                    status_icon.set_icon_name(Some("emblem-ok-symbolic"));
+                }
+                WorkerMessage::Status(Ok(false)) => {
+                    status.set_title("Waiting for your tablet");
+                    status.set_subtitle("Driver is running. Connect your Huion HS64 to begin.");
+                    status_icon.set_icon_name(Some("input-tablet-symbolic"));
+                }
+                WorkerMessage::Status(Err(error)) => {
+                    status.set_title("Driver unavailable");
+                    status.set_subtitle(
+                        "You can save settings locally. Start huion-daemon to use your tablet.",
+                    );
+                    status.set_tooltip_text(Some(&error));
+                    status_icon.set_icon_name(Some("network-offline-symbolic"));
+                }
+                WorkerMessage::Applied(result) => {
+                    apply.set_sensitive(true);
+                    apply.set_label("Apply");
+                    let text = match result {
+                        Ok(text) => text,
+                        Err(error) => error,
+                    };
+                    let toast = adw::Toast::new(&text);
+                    toast.set_timeout(6);
+                    overlay.add_toast(toast);
+                }
+            }
+        }
+        gtk4::glib::ControlFlow::Continue
+    });
     window.present();
+}
+
+#[derive(Clone, Copy)]
+struct Sample {
+    x: f64,
+    y: f64,
+    pressure: f64,
+}
+
+#[derive(Default)]
+struct Canvas {
+    strokes: Vec<Vec<Sample>>,
+    drawing: bool,
+    samples: usize,
+}
+
+fn pressure_canvas() -> (
+    gtk4::DrawingArea,
+    gtk4::Label,
+    gtk4::ProgressBar,
+    gtk4::Button,
+) {
+    let area = gtk4::DrawingArea::builder()
+        .content_height(190)
+        .hexpand(true)
+        .css_classes(["card"])
+        .overflow(gtk4::Overflow::Hidden)
+        .build();
+    area.set_tooltip_text(Some(
+        "Use a tablet stylus. A mouse cannot report pen pressure.",
+    ));
+    let label = gtk4::Label::builder()
+        .label("Waiting for stylus pressure")
+        .css_classes(["dim-label", "caption"])
+        .build();
+    let meter = gtk4::ProgressBar::new();
+    let state = Rc::new(RefCell::new(Canvas::default()));
+    let draw_state = state.clone();
+    area.set_draw_func(move |area, cr, width, height| {
+        let color = area.style_context().color();
+        cr.set_source_rgba(
+            color.red() as f64,
+            color.green() as f64,
+            color.blue() as f64,
+            0.04,
+        );
+        let _ = cr.paint();
+        cr.set_source_rgba(
+            color.red() as f64,
+            color.green() as f64,
+            color.blue() as f64,
+            0.18,
+        );
+        cr.set_line_width(1.0);
+        let mut x = 20;
+        while x < width {
+            let mut y = 20;
+            while y < height {
+                cr.arc(x as f64, y as f64, 0.7, 0.0, std::f64::consts::TAU);
+                let _ = cr.fill();
+                y += 20;
+            }
+            x += 20;
+        }
+        cr.set_source_rgb(0.24, 0.52, 0.92);
+        cr.set_line_cap(gtk4::cairo::LineCap::Round);
+        for stroke in &draw_state.borrow().strokes {
+            if stroke.len() == 1 {
+                let p = stroke[0];
+                cr.arc(p.x, p.y, 0.5 + 7.0 * p.pressure, 0.0, std::f64::consts::TAU);
+                let _ = cr.fill();
+            }
+            for pair in stroke.windows(2) {
+                cr.set_line_width(1.0 + 14.0 * (pair[0].pressure + pair[1].pressure) / 2.0);
+                cr.move_to(pair[0].x, pair[0].y);
+                cr.line_to(pair[1].x, pair[1].y);
+                let _ = cr.stroke();
+            }
+        }
+    });
+    let stylus = gtk4::GestureStylus::new();
+    let down_state = state.clone();
+    let down_area = area.downgrade();
+    let down_label = label.clone();
+    let down_meter = meter.clone();
+    stylus.connect_down(move |gesture, x, y| {
+        let mut state = down_state.borrow_mut();
+        // Bound storage so a long drawing session cannot grow without limit.
+        if state.samples >= 50_000 {
+            state.strokes.clear();
+            state.samples = 0;
+        }
+        state.drawing = true;
+        state.strokes.push(Vec::new());
+        record_sample(gesture, &mut state, x, y, &down_label, &down_meter);
+        if let Some(area) = down_area.upgrade() {
+            area.queue_draw();
+        }
+    });
+    let motion_state = state.clone();
+    let motion_area = area.downgrade();
+    let motion_label = label.clone();
+    let motion_meter = meter.clone();
+    stylus.connect_motion(move |gesture, x, y| {
+        let mut state = motion_state.borrow_mut();
+        if state.drawing && state.samples < 50_000 {
+            record_sample(gesture, &mut state, x, y, &motion_label, &motion_meter);
+            if let Some(area) = motion_area.upgrade() {
+                area.queue_draw();
+            }
+        }
+    });
+    let up_state = state.clone();
+    let up_label = label.clone();
+    let up_meter = meter.clone();
+    stylus.connect_up(move |_, _, _| {
+        up_state.borrow_mut().drawing = false;
+        up_meter.set_fraction(0.0);
+        up_label.set_label("Pen lifted · pressure 0%");
+    });
+    let cancel_state = state.clone();
+    let cancel_label = label.clone();
+    let cancel_meter = meter.clone();
+    stylus.connect_cancel(move |_, _| {
+        cancel_state.borrow_mut().drawing = false;
+        cancel_meter.set_fraction(0.0);
+        cancel_label.set_label("Stroke interrupted · pressure 0%");
+    });
+    area.add_controller(stylus);
+    let clear = gtk4::Button::builder()
+        .label("Clear")
+        .css_classes(["flat"])
+        .build();
+    let clear_area = area.clone();
+    let clear_label = label.clone();
+    let clear_meter = meter.clone();
+    clear.connect_clicked(move |_| {
+        *state.borrow_mut() = Canvas::default();
+        clear_area.queue_draw();
+        clear_meter.set_fraction(0.0);
+        clear_label.set_label("Waiting for stylus pressure");
+    });
+    (area, label, meter, clear)
+}
+
+fn record_sample(
+    gesture: &gtk4::GestureStylus,
+    state: &mut Canvas,
+    x: f64,
+    y: f64,
+    label: &gtk4::Label,
+    meter: &gtk4::ProgressBar,
+) {
+    if let Some(pressure) = gesture
+        .axis(gtk4::gdk::AxisUse::Pressure)
+        .filter(|p| p.is_finite())
+    {
+        let pressure = pressure.clamp(0.0, 1.0);
+        meter.set_fraction(pressure);
+        label.set_label(&format!("Stylus pressure · {:.0}%", pressure * 100.0));
+        if let Some(stroke) = state.strokes.last_mut() {
+            stroke.push(Sample { x, y, pressure });
+            state.samples += 1;
+        }
+    } else {
+        meter.set_fraction(0.0);
+        label.set_label("No pressure axis received from this input device");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn soft_and_firm_presets_have_correct_response() {
+        for input in [0.1, 0.25, 0.5, 0.75, 0.9] {
+            assert!(soft_curve().evaluate(input) > input);
+            assert!(firm_curve().evaluate(input) < input);
+        }
+    }
+
+    #[test]
+    fn existing_pressure_curves_select_matching_profile() {
+        assert_eq!(curve_selection(PressureCurve::default()), 0);
+        assert_eq!(curve_selection(soft_curve()), 1);
+        assert_eq!(curve_selection(firm_curve()), 2);
+        assert_eq!(curve_selection(PressureCurve::new(0.1, 0.3, 0.8, 0.7)), 3);
+    }
+
+    #[test]
+    fn key_bindings_roundtrip_without_resetting_saved_actions() {
+        let mut actions = TabletConfig::default().express_keys.to_vec();
+        actions.extend([
+            KeyAction::Disabled,
+            KeyAction::MouseButton(272),
+            KeyAction::MouseButton(276),
+            KeyAction::MouseButton(279),
+        ]);
+        for action in actions {
+            assert_eq!(parse_action(&action_text(&action)).unwrap(), action);
+        }
+        assert_eq!(
+            parse_action(" key_leftctrl + key_a ").unwrap(),
+            KeyAction::KeyCombo(vec!["KEY_LEFTCTRL".into(), "KEY_A".into()])
+        );
+    }
+
+    #[test]
+    fn invalid_shortcuts_fail_instead_of_silently_disabling_buttons() {
+        for invalid in [
+            "Ctrl + Z",
+            "KEY_",
+            "KEY_A +",
+            "BTN_UNKNOWN",
+            "KEY_A + BTN_LEFT",
+            "KEY_THIS_DOES_NOT_EXIST",
+            "KEY_Z + KEY_Z",
+        ] {
+            assert!(parse_action(invalid).is_err(), "{invalid}");
+        }
+    }
 }
