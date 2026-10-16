@@ -4,7 +4,7 @@ UDEVDIR ?= /etc/udev/rules.d
 SYSTEMDUSERDIR ?= $(PREFIX)/lib/systemd/user
 APPDIR ?= $(PREFIX)/share/applications
 
-.PHONY: all build test install uninstall clean
+.PHONY: all build test test-kernel test-session test-lifecycle install uninstall clean
 
 all: build
 
@@ -13,6 +13,18 @@ build:
 
 test:
 	cargo test --workspace
+
+# Requires access to uinput and generated evdev nodes.
+test-kernel:
+	cargo test -p huion-daemon -- --include-ignored
+
+# Requires the running installed user service.
+test-session:
+	python3 tests/session_e2e.py
+
+# Briefly stops/restarts the installed user service.
+test-lifecycle:
+	python3 tests/lifecycle_e2e.py
 
 install: build
 	install -d $(DESTDIR)$(BINDIR)
