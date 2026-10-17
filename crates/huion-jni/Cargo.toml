@@ -1,0 +1,13 @@
+[package]
+name = "huion-jni"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+huion-proto = { path = "../huion-proto" }
+jni = { version = "0.21", default-features = false }

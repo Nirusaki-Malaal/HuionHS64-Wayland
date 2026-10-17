@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Huion HS64: Vendor ID 0x256C = 9580 -->
+    <usb-device vendor-id="9580" />
+</resources>
