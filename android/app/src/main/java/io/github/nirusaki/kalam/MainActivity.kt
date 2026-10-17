@@ -125,6 +125,7 @@ fun MainApp(
             } else {
                 TestCanvasScreen(
                     usbStylus = stylusReport,
+                    keyReport = keyReport,
                     settings = settings
                 )
             }
