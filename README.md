@@ -1,8 +1,13 @@
 # Kalam
 
-**A reverse engineering project by nirusaki.** A native Wayland driver and settings app for the **Huion HS64**.
+**A reverse engineering project by nirusaki.** A native Wayland driver and Material You Android client for the **Huion HS64**.
 
-## Install
+## Supported Platforms
+
+- **Linux (Wayland)**: Native Rust userspace daemon and GTK4/Libadwaita settings application (`x86_64` and `aarch64` / ARM64).
+- **Android (Non-Rooted)**: Jetpack Compose Material You application running on Android 8.0 to Android 17+ via direct USB OTG.
+
+## Install on Linux (Wayland)
 
 Open a terminal in your Wayland desktop and paste this, **without sudo**:
 
@@ -12,11 +17,20 @@ curl -fsSL https://raw.githubusercontent.com/Nirusaki-Malaal/HuionHS64-Wayland/m
 
 The installer detects your distro, installs dependencies, builds the app and starts the driver at login. It asks for your password when needed. [Special setups and uninstalling](docs/DOCUMENTATION.md#online-installer).
 
-## What it does and how to use it
+Pre-built binaries for `x86_64` and `aarch64` are also available in [Releases](https://github.com/Nirusaki-Malaal/HuionHS64-Wayland/releases).
 
-- Pen pressure, tablet rotation and four configurable shortcut buttons.
-- Open **Kalam Tablet Settings** from your app menu, or run `huion-gui`.
-- Choose your settings, press **Apply**, and draw in **Try your pen** to test them.
+## Install on Android
+
+1. Download `kalam-android-v1.1.0.apk` (or `kalam-android-arm64-v1.1.0.apk`) from [Releases](https://github.com/Nirusaki-Malaal/HuionHS64-Wayland/releases).
+2. Install the APK on your device (no root required).
+3. Connect your Huion HS64 tablet using a USB OTG adapter and grant USB permissions when prompted.
+
+## Features
+
+- **Stylus Pressure**: 8192 levels with real-time configurable cubic Bezier response curves (Linear, Soft, Firm, Custom).
+- **4-Way Tablet Rotation**: 0 deg (Landscape), 90 deg (Portrait), 180 deg (Inverted Landscape), and 270 deg (Inverted Portrait) with automatic coordinate transformation.
+- **Express Keys**: 4 configurable hardware buttons with quick action presets (Undo, Redo, Brush, Eraser, Zoom, Pan) and visual HUD feedback.
+- **Test Canvas**: Integrated scratchpad to test pressure sensitivity, stylus hover/proximity, and express keys.
 
 ## AI usage disclosure
 
@@ -38,3 +52,4 @@ Reverse engineering and development were AI-assisted using **GEMINI 3.8 Flash**,
 | Settings window | 49.42 MiB | 0.77% |
 
 30-second observation on Arch Linux/Wayland, with the settings window open. Results vary. [Method and raw measurements](docs/DOCUMENTATION.md#resource-measurements).
+
