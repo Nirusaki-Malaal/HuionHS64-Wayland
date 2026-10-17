@@ -273,7 +273,10 @@ fn start_worker() -> (mpsc::Sender<TabletConfig>, mpsc::Receiver<WorkerMessage>)
     (requests, results)
 }
 
-fn apply_config_sync(config: &TabletConfig, conn: Option<&zbus::blocking::Connection>) -> Result<String, String> {
+fn apply_config_sync(
+    config: &TabletConfig,
+    conn: Option<&zbus::blocking::Connection>,
+) -> Result<String, String> {
     config.validate()?;
     let json = serde_json::to_string(config).map_err(|e| e.to_string())?;
 
@@ -289,7 +292,10 @@ fn apply_config_sync(config: &TabletConfig, conn: Option<&zbus::blocking::Connec
                 if ok {
                     return Ok("Settings applied to the driver".into());
                 } else {
-                    return Err("The driver rejected these settings. Check key names and the driver log.".into());
+                    return Err(
+                        "The driver rejected these settings. Check key names and the driver log."
+                            .into(),
+                    );
                 }
             }
         }
