@@ -31,3 +31,10 @@ __pycache__/
 /research/
 /BUILD_CONTEXT.md
 /build_context.md
+
+# Android build outputs and local configurations
+.gradle/
+android/.gradle/
+android/app/build/
+android/local.properties
+android/app/src/main/jniLibs/
