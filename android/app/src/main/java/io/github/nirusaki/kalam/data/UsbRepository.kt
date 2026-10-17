@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.*
+import android.os.Build
 import io.github.nirusaki.kalam.bridge.NativeBridge
 import io.github.nirusaki.kalam.model.ExpressKeysReport
 import io.github.nirusaki.kalam.model.StylusReport
@@ -15,7 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class UsbRepository(private val context: Context) {
-    private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+    private val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
     private val ACTION_USB_PERMISSION = "io.github.nirusaki.kalam.USB_PERMISSION"
 
     private val _isConnected = MutableStateFlow(false)
@@ -35,79 +36,118 @@ class UsbRepository(private val context: Context) {
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) {
-            when (intent.action) {
-                ACTION_USB_PERMISSION -> {
-                    val device: UsbDevice? = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                    val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                    if (granted && device != null) {
-                        openDevice(device)
+            try {
+                when (intent.action) {
+                    ACTION_USB_PERMISSION -> {
+                        val device = getUsbDeviceFromIntent(intent)
+                        val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                        if (granted && device != null) {
+                            openDevice(device)
+                        }
+                    }
+                    UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                        val device = getUsbDeviceFromIntent(intent)
+                        if (device?.vendorId == 0x256C) {
+                            disconnectDevice()
+                        }
+                    }
+                    UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                        probeDevice()
                     }
                 }
-                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    val device: UsbDevice? = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                    if (device?.vendorId == 0x256C) {
-                        disconnectDevice()
-                    }
-                }
-                UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    probeDevice()
-                }
+            } catch (t: Throwable) {
+                t.printStackTrace()
             }
         }
     }
 
     init {
-        val filter = IntentFilter().apply {
-            addAction(ACTION_USB_PERMISSION)
-            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
-            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        try {
+            val filter = IntentFilter().apply {
+                addAction(ACTION_USB_PERMISSION)
+                addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+                addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                context.registerReceiver(receiver, filter)
+            }
+        } catch (t: Throwable) {
+            t.printStackTrace()
         }
-        context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
         probeDevice()
     }
 
-    fun probeDevice() {
-        val device = usbManager.deviceList.values.firstOrNull { it.vendorId == 0x256C }
-        if (device != null) {
-            if (usbManager.hasPermission(device)) {
-                openDevice(device)
+    private fun getUsbDeviceFromIntent(intent: Intent): UsbDevice? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
             } else {
-                val pi = PendingIntent.getBroadcast(
-                    context,
-                    0,
-                    Intent(ACTION_USB_PERMISSION),
-                    PendingIntent.FLAG_IMMUTABLE
-                )
-                usbManager.requestPermission(device, pi)
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
             }
-        } else {
-            disconnectDevice()
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    fun probeDevice() {
+        val manager = usbManager ?: return
+        try {
+            val device = manager.deviceList.values.firstOrNull { it.vendorId == 0x256C }
+            if (device != null) {
+                if (manager.hasPermission(device)) {
+                    openDevice(device)
+                } else {
+                    val intent = Intent(ACTION_USB_PERMISSION).apply {
+                        setPackage(context.packageName)
+                    }
+                    val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        PendingIntent.FLAG_MUTABLE
+                    } else {
+                        0
+                    }
+                    val pi = PendingIntent.getBroadcast(context, 0, intent, flags)
+                    manager.requestPermission(device, pi)
+                }
+            } else {
+                disconnectDevice()
+            }
+        } catch (t: Throwable) {
+            t.printStackTrace()
         }
     }
 
     private fun openDevice(device: UsbDevice) {
-        val intf = (0 until device.interfaceCount)
-            .map { device.getInterface(it) }
-            .firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_HID }
-            ?: device.getInterface(0)
+        val manager = usbManager ?: return
+        try {
+            val intf = (0 until device.interfaceCount)
+                .map { device.getInterface(it) }
+                .firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_HID }
+                ?: device.getInterface(0)
 
-        val ep = (0 until intf.endpointCount)
-            .map { intf.getEndpoint(it) }
-            .firstOrNull { it.direction == UsbConstants.USB_DIR_IN }
-            ?: return
+            val ep = (0 until intf.endpointCount)
+                .map { intf.getEndpoint(it) }
+                .firstOrNull { it.direction == UsbConstants.USB_DIR_IN }
+                ?: return
 
-        val conn = usbManager.openDevice(device) ?: return
-        if (!conn.claimInterface(intf, true)) {
-            conn.close()
-            return
+            val conn = manager.openDevice(device) ?: return
+            if (!conn.claimInterface(intf, true)) {
+                conn.close()
+                return
+            }
+
+            connection = conn
+            usbInterface = intf
+            inEndpoint = ep
+            _isConnected.value = true
+
+            startPolling()
+        } catch (t: Throwable) {
+            t.printStackTrace()
         }
-
-        connection = conn
-        usbInterface = intf
-        inEndpoint = ep
-        _isConnected.value = true
-
-        startPolling()
     }
 
     private fun startPolling() {
@@ -119,32 +159,37 @@ class UsbRepository(private val context: Context) {
             while (isActive && _isConnected.value) {
                 val conn = connection ?: break
                 val ep = inEndpoint ?: break
-                val len = conn.bulkTransfer(ep, buffer, buffer.size, 100)
-                if (len > 0) {
-                    val slice = buffer.copyOf(len)
-                    val ok = NativeBridge.parseUsbReport(slice, parsedFields)
-                    if (ok) {
-                        when (parsedFields[0]) {
-                            1 -> { // Stylus Report
-                                _stylusReport.value = StylusReport(
-                                    x = parsedFields[1],
-                                    y = parsedFields[2],
-                                    pressure = parsedFields[3],
-                                    touching = parsedFields[4] == 1,
-                                    barrelSwitch = parsedFields[5] == 1,
-                                    inRange = parsedFields[6] == 1
-                                )
-                            }
-                            2 -> { // Express Keys Report
-                                _keyReport.value = ExpressKeysReport(
-                                    key1 = parsedFields[1] == 1,
-                                    key2 = parsedFields[2] == 1,
-                                    key3 = parsedFields[3] == 1,
-                                    key4 = parsedFields[4] == 1
-                                )
+                try {
+                    val len = conn.bulkTransfer(ep, buffer, buffer.size, 100)
+                    if (len > 0) {
+                        val slice = buffer.copyOf(len)
+                        val ok = NativeBridge.parseUsbReport(slice, parsedFields)
+                        if (ok) {
+                            when (parsedFields[0]) {
+                                1 -> { // Stylus Report
+                                    _stylusReport.value = StylusReport(
+                                        x = parsedFields[1],
+                                        y = parsedFields[2],
+                                        pressure = parsedFields[3],
+                                        touching = parsedFields[4] == 1,
+                                        barrelSwitch = parsedFields[5] == 1,
+                                        inRange = parsedFields[6] == 1
+                                    )
+                                }
+                                2 -> { // Express Keys Report
+                                    _keyReport.value = ExpressKeysReport(
+                                        key1 = parsedFields[1] == 1,
+                                        key2 = parsedFields[2] == 1,
+                                        key3 = parsedFields[3] == 1,
+                                        key4 = parsedFields[4] == 1
+                                    )
+                                }
                             }
                         }
                     }
+                } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
+                    t.printStackTrace()
                 }
             }
         }
@@ -155,9 +200,11 @@ class UsbRepository(private val context: Context) {
         usbInterface?.let {
             try {
                 connection?.releaseInterface(it)
-            } catch (_: Exception) {}
+            } catch (_: Throwable) {}
         }
-        connection?.close()
+        try {
+            connection?.close()
+        } catch (_: Throwable) {}
         connection = null
         usbInterface = null
         inEndpoint = null
@@ -171,6 +218,6 @@ class UsbRepository(private val context: Context) {
         scope.cancel()
         try {
             context.unregisterReceiver(receiver)
-        } catch (_: Exception) {}
+        } catch (_: Throwable) {}
     }
 }
