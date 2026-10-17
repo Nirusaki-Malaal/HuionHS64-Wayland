@@ -1,13 +1,8 @@
 # Kalam
 
-**A reverse engineering project by nirusaki.** A native Wayland driver and Material You Android client for the **Huion HS64**.
+**A reverse engineering project by nirusaki.** A native Wayland driver and GTK4/Libadwaita settings application for the **Huion HS64** (`x86_64` and `aarch64` / ARM64).
 
-## Supported Platforms
-
-- **Linux (Wayland)**: Native Rust userspace daemon and GTK4/Libadwaita settings application (`x86_64` and `aarch64` / ARM64).
-- **Android (Non-Rooted)**: Jetpack Compose Material You application running on Android 8.0 to Android 17+ via direct USB OTG.
-
-## Install on Linux (Wayland)
+## Install
 
 Open a terminal in your Wayland desktop and paste this, **without sudo**:
 
@@ -18,12 +13,6 @@ curl -fsSL https://raw.githubusercontent.com/Nirusaki-Malaal/HuionHS64-Wayland/m
 The installer detects your distro, installs dependencies, builds the app and starts the driver at login. It asks for your password when needed. [Special setups and uninstalling](docs/DOCUMENTATION.md#online-installer).
 
 Pre-built binaries for `x86_64` and `aarch64` are also available in [Releases](https://github.com/Nirusaki-Malaal/HuionHS64-Wayland/releases).
-
-## Install on Android
-
-1. Download `kalam-android-v1.1.0.apk` (or `kalam-android-arm64-v1.1.0.apk`) from [Releases](https://github.com/Nirusaki-Malaal/HuionHS64-Wayland/releases).
-2. Install the APK on your device (no root required).
-3. Connect your Huion HS64 tablet using a USB OTG adapter and grant USB permissions when prompted.
 
 ## Features
 

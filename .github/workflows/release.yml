@@ -48,12 +48,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           mkdir -p dist
-          find artifacts/ -type f \( -name "*.tar.gz" -o -name "*.apk" \) -exec cp -f {} dist/ \;
+          find artifacts/ -type f -name "*.tar.gz" -exec cp -f {} dist/ \;
           cd dist
-          sha256sum *.tar.gz *.apk > SHA256SUMS
+          sha256sum *.tar.gz > SHA256SUMS
           sha256sum --check SHA256SUMS
           cd ..
-          gh release create "$RESOLVED_TAG" dist/*.tar.gz dist/*.apk dist/SHA256SUMS \
-            --title "Kalam V${RESOLVED_TAG#v} - Multi-Arch Linux and Android" --notes-file docs/RELEASE_NOTES.md
+          gh release create "$RESOLVED_TAG" dist/*.tar.gz dist/SHA256SUMS \
+            --title "Kalam V${RESOLVED_TAG#v} - Multi-Arch Linux" --notes-file docs/RELEASE_NOTES.md
 
 

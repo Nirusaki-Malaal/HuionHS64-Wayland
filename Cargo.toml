@@ -3,7 +3,6 @@ members = [
     "crates/huion-proto",
     "crates/huion-daemon",
     "crates/huion-gui",
-    "crates/huion-jni",
 ]
 resolver = "2"
 

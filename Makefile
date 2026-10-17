@@ -49,16 +49,5 @@ uninstall:
 	rm -f $(DESTDIR)$(APPDIR)/io.github.nirusaki.HuionWayland.desktop
 	rm -f $(DESTDIR)$(MODULESDIR)/kalam-uinput.conf
 
-JNI_LIBS_DIR := android/app/src/main/jniLibs
-
-android-libs:
-	@mkdir -p $(JNI_LIBS_DIR)/arm64-v8a $(JNI_LIBS_DIR)/armeabi-v7a $(JNI_LIBS_DIR)/x86_64
-	cargo ndk -t arm64-v8a -o $(JNI_LIBS_DIR) build --release -p huion-jni
-	cargo ndk -t armeabi-v7a -o $(JNI_LIBS_DIR) build --release -p huion-jni
-	cargo ndk -t x86_64 -o $(JNI_LIBS_DIR) build --release -p huion-jni
-
-android-apk: android-libs
-	cd android && ./gradlew assembleDebug
-
 clean:
 	cargo clean
