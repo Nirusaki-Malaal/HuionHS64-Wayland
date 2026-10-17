@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """Check the actual archive and staged install/uninstall without touching the host."""
+import argparse
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
+import platform
 import subprocess
 import tarfile
 import tempfile
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--arch', default=None)
+args = parser.parse_args()
+machine = platform.machine()
+arch = args.arch or ('aarch64' if machine in ('aarch64', 'arm64') else 'x86_64')
 version = tomllib.loads((ROOT/'Cargo.toml').read_text())['workspace']['package']['version']
-archive = ROOT/'dist'/f'kalam-{version}-linux-x86_64.tar.gz'
+archive = ROOT/'dist'/f'kalam-{version}-linux-{arch}.tar.gz'
 digest, filename = (ROOT/'dist/SHA256SUMS').read_text().split()
 assert filename == archive.name
 assert hashlib.sha256(archive.read_bytes()).hexdigest() == digest

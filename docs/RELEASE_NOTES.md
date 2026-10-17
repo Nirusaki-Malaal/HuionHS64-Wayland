@@ -13,17 +13,17 @@ Kalam V1.1.0 brings official Android support alongside the native Linux Wayland 
 
 ## Install on Linux
 
-Download `kalam-1.1.0-linux-x86_64.tar.gz` and `SHA256SUMS` from this release.
+Download `kalam-1.1.0-linux-x86_64.tar.gz` (for Intel/AMD x86_64) or `kalam-1.1.0-linux-aarch64.tar.gz` (for ARM64/aarch64) and `SHA256SUMS` from this release.
 
 ```sh
 sha256sum --check SHA256SUMS
-tar -xzf kalam-1.1.0-linux-x86_64.tar.gz
-cd kalam-1.1.0-linux-x86_64
+tar -xzf kalam-1.1.0-linux-x86_64.tar.gz  # or kalam-1.1.0-linux-aarch64.tar.gz
+cd kalam-1.1.0-linux-*
 ./install.sh
 huion-gui
 ```
 
 ## Install on Android
 
-Download `kalam-android-v1.1.0.apk` from the release assets and install it directly on your Android phone or tablet. Connect the Huion HS64 via a USB OTG adapter and grant USB permission when prompted.
+Download `kalam-android-v1.1.0.apk` or `kalam-android-arm64-v1.1.0.apk` from the release assets and install it directly on your Android phone or tablet. Connect the Huion HS64 via a USB OTG adapter and grant USB permission when prompted.
 

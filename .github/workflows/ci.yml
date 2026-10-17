@@ -11,9 +11,17 @@ permissions:
 
 jobs:
   checks:
-    name: Rust checks and release packaging
-    runs-on: ubuntu-24.04
+    name: Linux checks and release packaging (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            os: ubuntu-24.04
+          - arch: aarch64
+            os: ubuntu-24.04-arm
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
@@ -45,12 +53,12 @@ jobs:
         run: cargo build --release --locked --workspace
       - name: Package and test extracted installer
         run: |
-          python3 tools/package_release.py
-          python3 tests/packaging_e2e.py
+          python3 tools/package_release.py --arch ${{ matrix.arch }}
+          python3 tests/packaging_e2e.py --arch ${{ matrix.arch }}
       - name: Upload binary bundle and checksums
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: kalam-linux-x86_64
+          name: kalam-linux-${{ matrix.arch }}
           path: |
             dist/*.tar.gz
             dist/SHA256SUMS
@@ -78,8 +86,9 @@ jobs:
         run: |
           mkdir -p dist-android
           cp android/app/build/outputs/apk/release/app-release.apk dist-android/kalam-android-v1.1.0.apk 2>/dev/null || cp android/app/build/outputs/apk/debug/app-debug.apk dist-android/kalam-android-v1.1.0.apk
+          cp dist-android/kalam-android-v1.1.0.apk dist-android/kalam-android-arm64-v1.1.0.apk
           cd dist-android
-          sha256sum kalam-android-v1.1.0.apk > SHA256SUMS.android
+          sha256sum kalam-android-v1.1.0.apk kalam-android-arm64-v1.1.0.apk > SHA256SUMS.android
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -22,19 +22,29 @@ def output(*command):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=ROOT / 'dist')
+    parser.add_argument('--arch', choices=['x86_64', 'aarch64', 'arm64'], default=None)
     args = parser.parse_args()
-    if platform.system() != 'Linux' or platform.machine() != 'x86_64':
-        parser.error('This release package supports Linux x86_64')
+    machine = platform.machine()
+    default_arch = 'aarch64' if machine in ('aarch64', 'arm64') else ('x86_64' if machine == 'x86_64' else machine)
+    arch = args.arch or default_arch
+    if arch == 'arm64':
+        arch = 'aarch64'
+    if platform.system() != 'Linux' or arch not in ('x86_64', 'aarch64'):
+        parser.error(f'This release package supports Linux x86_64 and aarch64 (got {platform.system()} {arch})')
     metadata = tomllib.loads((ROOT / 'Cargo.toml').read_text())['workspace']['package']
     version = metadata['version']
-    name = f'kalam-{version}-linux-x86_64'
+    name = f'kalam-{version}-linux-{arch}'
     args.output.mkdir(parents=True, exist_ok=True)
     epoch = int(output('git', 'show', '-s', '--format=%ct', 'HEAD'))
     with tempfile.TemporaryDirectory(prefix='kalam-package-') as temp:
         bundle = Path(temp) / name
         (bundle / 'bin').mkdir(parents=True)
+        target_triple = f'{arch}-unknown-linux-gnu'
+        target_dir = ROOT / 'target' / target_triple / 'release'
+        if not target_dir.is_dir():
+            target_dir = ROOT / 'target' / 'release'
         for binary in ('huion-daemon', 'huion-gui'):
-            source = ROOT / 'target/release' / binary
+            source = target_dir / binary
             if not source.is_file():
                 parser.error(f'Missing {source}; run cargo build --release --locked --workspace')
             target = bundle / 'bin' / binary
@@ -56,7 +66,7 @@ def main():
             'license': metadata['license'],
             'description': 'A reverse engineering project for the Huion HS64 on native Wayland',
             'commit': output('git', 'rev-parse', 'HEAD'),
-            'target': 'x86_64-unknown-linux-gnu',
+            'target': target_triple,
             'build_system': platform.freedesktop_os_release().get('PRETTY_NAME'),
             'glibc': platform.libc_ver(),
             'rustc': output('rustc', '--version'),
