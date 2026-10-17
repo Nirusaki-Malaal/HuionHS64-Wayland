@@ -53,7 +53,12 @@ jobs:
           sha256sum *.tar.gz > SHA256SUMS
           sha256sum --check SHA256SUMS
           cd ..
-          gh release create "$RESOLVED_TAG" dist/*.tar.gz dist/SHA256SUMS \
-            --title "Kalam V${RESOLVED_TAG#v} - Multi-Arch Linux" --notes-file docs/RELEASE_NOTES.md
+          if gh release view "$RESOLVED_TAG" >/dev/null 2>&1; then
+            gh release edit "$RESOLVED_TAG" --title "Kalam V${RESOLVED_TAG#v} - Multi-Arch Linux" --notes-file docs/RELEASE_NOTES.md
+            gh release upload "$RESOLVED_TAG" dist/*.tar.gz dist/SHA256SUMS --clobber
+          else
+            gh release create "$RESOLVED_TAG" dist/*.tar.gz dist/SHA256SUMS \
+              --title "Kalam V${RESOLVED_TAG#v} - Multi-Arch Linux" --notes-file docs/RELEASE_NOTES.md
+          fi
 
 
