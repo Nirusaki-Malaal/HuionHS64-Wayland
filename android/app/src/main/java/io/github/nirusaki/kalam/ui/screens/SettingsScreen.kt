@@ -18,6 +18,7 @@ import io.github.nirusaki.kalam.ui.components.TabletDiagram
 @Composable
 fun SettingsScreen(
     isConnected: Boolean,
+    connectionStatus: String,
     activeButton: Int,
     settings: TabletSettings,
     onSettingsChange: (TabletSettings) -> Unit,
@@ -42,7 +43,7 @@ fun SettingsScreen(
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Huion HS64", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        if (isConnected) "Connected via USB OTG (VID: 0x256C)" else "Disconnected · Plug in tablet OTG",
+                        connectionStatus,
                         style = MaterialTheme.typography.bodySmall,
                         color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                     )

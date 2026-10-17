@@ -5,8 +5,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.hardware.input.InputManager
 import android.hardware.usb.*
 import android.os.Build
+import android.view.InputDevice
+import android.view.KeyEvent
 import io.github.nirusaki.kalam.bridge.NativeBridge
 import io.github.nirusaki.kalam.model.ExpressKeysReport
 import io.github.nirusaki.kalam.model.StylusReport
@@ -17,10 +20,14 @@ import kotlinx.coroutines.flow.asStateFlow
 
 class UsbRepository(private val context: Context) {
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
+    private val inputManager = context.getSystemService(Context.INPUT_SERVICE) as? InputManager
     private val ACTION_USB_PERMISSION = "io.github.nirusaki.kalam.USB_PERMISSION"
 
     private val _isConnected = MutableStateFlow(false)
     val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+
+    private val _connectionStatus = MutableStateFlow("Disconnected · Plug in tablet OTG")
+    val connectionStatus: StateFlow<String> = _connectionStatus.asStateFlow()
 
     private val _stylusReport = MutableStateFlow<StylusReport?>(null)
     val stylusReport: StateFlow<StylusReport?> = _stylusReport.asStateFlow()
@@ -48,7 +55,8 @@ class UsbRepository(private val context: Context) {
                     UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                         val device = getUsbDeviceFromIntent(intent)
                         if (device?.vendorId == 0x256C) {
-                            disconnectDevice()
+                            disconnectUsbDevice()
+                            probeDevice()
                         }
                     }
                     UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
@@ -58,6 +66,18 @@ class UsbRepository(private val context: Context) {
             } catch (t: Throwable) {
                 t.printStackTrace()
             }
+        }
+    }
+
+    private val inputDeviceListener = object : InputManager.InputDeviceListener {
+        override fun onInputDeviceAdded(deviceId: Int) {
+            probeDevice()
+        }
+        override fun onInputDeviceRemoved(deviceId: Int) {
+            probeDevice()
+        }
+        override fun onInputDeviceChanged(deviceId: Int) {
+            probeDevice()
         }
     }
 
@@ -77,6 +97,13 @@ class UsbRepository(private val context: Context) {
         } catch (t: Throwable) {
             t.printStackTrace()
         }
+
+        try {
+            inputManager?.registerInputDeviceListener(inputDeviceListener, null)
+        } catch (t: Throwable) {
+            t.printStackTrace()
+        }
+
         probeDevice()
     }
 
@@ -94,30 +121,58 @@ class UsbRepository(private val context: Context) {
     }
 
     fun probeDevice() {
-        val manager = usbManager ?: return
-        try {
-            val device = manager.deviceList.values.firstOrNull { it.vendorId == 0x256C }
-            if (device != null) {
-                if (manager.hasPermission(device)) {
-                    openDevice(device)
-                } else {
-                    val intent = Intent(ACTION_USB_PERMISSION).apply {
-                        setPackage(context.packageName)
-                    }
-                    val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        PendingIntent.FLAG_MUTABLE
+        // 1. Direct USB Host probing
+        val manager = usbManager
+        if (manager != null) {
+            try {
+                val device = manager.deviceList.values.firstOrNull { it.vendorId == 0x256C }
+                if (device != null) {
+                    if (manager.hasPermission(device)) {
+                        openDevice(device)
+                        return
                     } else {
-                        0
+                        val intent = Intent(ACTION_USB_PERMISSION).apply {
+                            setPackage(context.packageName)
+                        }
+                        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            PendingIntent.FLAG_MUTABLE
+                        } else {
+                            0
+                        }
+                        val pi = PendingIntent.getBroadcast(context, 0, intent, flags)
+                        manager.requestPermission(device, pi)
+                        _isConnected.value = true
+                        _connectionStatus.value = "Requesting USB OTG permission…"
+                        return
                     }
-                    val pi = PendingIntent.getBroadcast(context, 0, intent, flags)
-                    manager.requestPermission(device, pi)
                 }
-            } else {
-                disconnectDevice()
+            } catch (t: Throwable) {
+                t.printStackTrace()
             }
-        } catch (t: Throwable) {
-            t.printStackTrace()
         }
+
+        // 2. Android InputDevice subsystem probing (Kernel / Wayland passthrough / Stylus)
+        val im = inputManager
+        if (im != null) {
+            try {
+                for (id in im.inputDeviceIds) {
+                    val dev = im.getInputDevice(id) ?: continue
+                    val isHuion = dev.vendorId == 0x256C || dev.name.contains("Huion", ignoreCase = true)
+                    val hasStylus = (dev.sources and InputDevice.SOURCE_STYLUS) != 0
+                    if (isHuion || (hasStylus && !dev.isVirtual)) {
+                        _isConnected.value = true
+                        _connectionStatus.value = "Connected: ${dev.name} (Stylus & Keys)"
+                        return
+                    }
+                }
+            } catch (t: Throwable) {
+                t.printStackTrace()
+            }
+        }
+
+        disconnectUsbDevice()
+        _isConnected.value = false
+        _connectionStatus.value = "Disconnected · Plug in tablet OTG"
     }
 
     private fun openDevice(device: UsbDevice) {
@@ -143,6 +198,7 @@ class UsbRepository(private val context: Context) {
             usbInterface = intf
             inEndpoint = ep
             _isConnected.value = true
+            _connectionStatus.value = "Connected via USB OTG (VID: 0x256C)"
 
             startPolling()
         } catch (t: Throwable) {
@@ -195,7 +251,19 @@ class UsbRepository(private val context: Context) {
         }
     }
 
-    private fun disconnectDevice() {
+    fun onHardwareKeyEvent(keyCode: Int, isDown: Boolean) {
+        val current = _keyReport.value
+        val updated = when (keyCode) {
+            KeyEvent.KEYCODE_E, KeyEvent.KEYCODE_BUTTON_1, KeyEvent.KEYCODE_1 -> current.copy(key1 = isDown)
+            KeyEvent.KEYCODE_B, KeyEvent.KEYCODE_BUTTON_2, KeyEvent.KEYCODE_2 -> current.copy(key2 = isDown)
+            KeyEvent.KEYCODE_Z, KeyEvent.KEYCODE_SPACE, KeyEvent.KEYCODE_BUTTON_3, KeyEvent.KEYCODE_3 -> current.copy(key3 = isDown)
+            KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_BUTTON_4, KeyEvent.KEYCODE_4 -> current.copy(key4 = isDown)
+            else -> current
+        }
+        _keyReport.value = updated
+    }
+
+    private fun disconnectUsbDevice() {
         pollJob?.cancel()
         usbInterface?.let {
             try {
@@ -208,16 +276,18 @@ class UsbRepository(private val context: Context) {
         connection = null
         usbInterface = null
         inEndpoint = null
-        _isConnected.value = false
         _stylusReport.value = null
         _keyReport.value = ExpressKeysReport(false, false, false, false)
     }
 
     fun release() {
-        disconnectDevice()
+        disconnectUsbDevice()
         scope.cancel()
         try {
             context.unregisterReceiver(receiver)
+        } catch (_: Throwable) {}
+        try {
+            inputManager?.unregisterInputDeviceListener(inputDeviceListener)
         } catch (_: Throwable) {}
     }
 }

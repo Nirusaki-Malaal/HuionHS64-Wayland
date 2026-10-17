@@ -1,6 +1,7 @@
 package io.github.nirusaki.kalam
 
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -13,7 +14,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import io.github.nirusaki.kalam.data.ConfigRepository
 import io.github.nirusaki.kalam.data.UsbRepository
 import io.github.nirusaki.kalam.model.TabletSettings
@@ -40,9 +40,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (::usbRepository.isInitialized) {
+            usbRepository.onHardwareKeyEvent(keyCode, true)
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (::usbRepository.isInitialized) {
+            usbRepository.onHardwareKeyEvent(keyCode, false)
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        usbRepository.release()
+        if (::usbRepository.isInitialized) {
+            usbRepository.release()
+        }
     }
 }
 
@@ -56,6 +72,7 @@ fun MainApp(
     val scope = rememberCoroutineScope()
 
     val isConnected by usbRepository.isConnected.collectAsState()
+    val connectionStatus by usbRepository.connectionStatus.collectAsState()
     val stylusReport by usbRepository.stylusReport.collectAsState()
     val keyReport by usbRepository.keyReport.collectAsState()
 
@@ -95,6 +112,7 @@ fun MainApp(
             if (selectedTab == 0) {
                 SettingsScreen(
                     isConnected = isConnected,
+                    connectionStatus = connectionStatus,
                     activeButton = keyReport.activeKeyIndex(),
                     settings = settings,
                     onSettingsChange = { updated ->
