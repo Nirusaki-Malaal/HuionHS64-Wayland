@@ -1,37 +1,29 @@
-# Kalam V1.0.0
+# Kalam V1.1.0
 
-Kalam is a reverse engineering project made by nirusaki for the Huion HS64 on
-native Wayland. It replaces the X11-dependent vendor stack with a Rust userspace
-daemon and a GTK4/Libadwaita settings application.
+Kalam V1.1.0 brings official Android support alongside the native Linux Wayland stack for the Huion HS64 tablet. It introduces an unrooted Material You (Material 3) Android app with direct USB OTG communication, real-time Bezier curve tuning, 4-way rotation, and configurable express keys.
 
-## Included
+## Included in V1.1.0
 
-- Standard-mode HS64 pen pressure, proximity, orientation and active-area handling.
-- Exclusive physical input ownership to prevent competing pointer/keyboard events.
-- Configurable express buttons with simple presets and balanced key releases.
-- Native settings UI with a large pen-test workspace, local canvas rotation,
-  and a physical button diagram with position labels.
-- CI formatting, lint, test, release build and packaged installer checks.
-- Linux x86_64 binaries, SHA256SUMS, build metadata and easy install/uninstall scripts.
+- Native Android Support (Unrooted): Direct USB OTG communication via Android UsbManager and custom HID parser, compatible with Android 8.0 through Android 17+.
+- Material You Design: Jetpack Compose Material 3 interface with dynamic color theming, real-time pressure gauge, and responsive layout.
+- Dynamic Rotation & Canvas: Full 0 deg, 90 deg, 180 deg, and 270 deg rotation support with dynamic aspect ratio scaling and an express key indicator strip.
+- Express Key Remapping: Interactive shortcut dialog with presets (Undo, Redo, Brush, Eraser, Zoom, Pan) and custom mappings persisted via Jetpack DataStore.
+- Automated CI/CD: GitHub Actions workflows building and validating both Linux release bundles and installable Android APKs.
+- Standard Linux Wayland Stack: The complete Rust daemon, uinput emulation, and GTK4/Libadwaita settings app.
 
-## Install
+## Install on Linux
 
-Download `kalam-1.0.0-linux-x86_64.tar.gz` and `SHA256SUMS` from this release.
-The binaries are built on Ubuntu 24.04 and require compatible glibc/GTK libraries.
+Download `kalam-1.1.0-linux-x86_64.tar.gz` and `SHA256SUMS` from this release.
 
 ```sh
 sha256sum --check SHA256SUMS
-tar -xzf kalam-1.0.0-linux-x86_64.tar.gz
-cd kalam-1.0.0-linux-x86_64
+tar -xzf kalam-1.1.0-linux-x86_64.tar.gz
+cd kalam-1.1.0-linux-x86_64
 ./install.sh
 huion-gui
 ```
 
-Run as your desktop user; the installer requests sudo for system files and
-starts the user service. Use `./install.sh --enable` for autostart and
-`./uninstall.sh` to remove installed files while preserving personal settings.
-Ubuntu runtime dependencies: `libgtk-4-1 libadwaita-1-0 python3`.
+## Install on Android
 
-See README.md for source installation, dependencies and keyd exclusions. The
-supported hardware is standard-mode HS64 USB `256c:006f`; other Huion products,
-vendor mode and compositor output/aspect integration are outside this release.
+Download `kalam-android-v1.1.0.apk` from the release assets and install it directly on your Android phone or tablet. Connect the Huion HS64 via a USB OTG adapter and grant USB permission when prompted.
+

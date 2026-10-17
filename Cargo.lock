@@ -759,7 +759,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "huion-daemon"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "evdev",
@@ -777,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "huion-gui"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "evdev",
  "gtk4",
@@ -793,7 +793,7 @@ dependencies = [
 
 [[package]]
 name = "huion-jni"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "huion-proto",
  "jni",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "huion-proto"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "serde",
  "serde_json",
