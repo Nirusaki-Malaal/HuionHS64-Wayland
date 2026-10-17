@@ -101,10 +101,10 @@ pub extern "system" fn Java_io_github_nirusaki_kalam_bridge_NativeBridge_sampleC
 ) {
     let curve = PressureCurve::new(p1x as f64, p1y as f64, p2x as f64, p2y as f64);
     let mut float_samples = [0.0f32; 256];
-    for i in 0..256 {
+    for (i, sample) in float_samples.iter_mut().enumerate() {
         let input_ratio = i as f64 / 255.0;
         let evaluated = curve.evaluate(input_ratio);
-        float_samples[i] = evaluated as f32;
+        *sample = evaluated as f32;
     }
     let _ = env.set_float_array_region(&out_samples, 0, &float_samples);
 }
